@@ -1,0 +1,3 @@
+import ../src/borrowing
+
+enableBorrowChecking()
