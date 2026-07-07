@@ -19,11 +19,42 @@
   It's more complex
 ]#
 
-import std/syncio
+import std/[syncio, tables, hashes]
 import plugins
+
+type
+  SymPath = object
+    data: seq[SymId]
+func hash(s: SymPath): Hash =
+  var h: Hash = 0
+  for item in s.data: h = h !& hash(item)
+  result = !$h
+func `==`(s1, s2: SymPath): bool =
+  if s1.data.len != s2.data.len: return false
+  for i in 0..s1.data.high:
+    if s1.data[i] != s2.data[i]: return false
+  return true
 
 type
   VarId = distinct uint32
   Lifetime = object
     creation: (int, int)
     last: (int, int)
+
+  BCContext = object
+    buffer: NifBuilder
+    liveness: Table[VarId, Lifetime]
+    toVarId: Table[SymId, VarId]
+
+proc borrow_check(c: var NifCursor): NifBuilder =
+  var context = BCContext()
+  context.buffer = createTree()
+
+  var body = c.firstChild
+  while body.hasMore:
+    context.buffer.takeTree(body)
+
+  echo context.buffer.renderTree()
+
+var inp = loadPluginInput()
+saveTree borrow_check(inp)
