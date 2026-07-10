@@ -3,13 +3,15 @@ import std/syncio
 
 enableBorrowChecker()
 
-
 type
   RefO = ref object
     x: int
 
 proc main() =
   var x = RefO()
-  x.x += 1
+  var y = x
+  y = x
+  let z = y
+  echo x.x
 
 main()
