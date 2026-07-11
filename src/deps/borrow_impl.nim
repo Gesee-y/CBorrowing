@@ -48,7 +48,8 @@ type
     lifetimes: Table[SymId, Lifetime]
     varKinds: Table[SymId, VarKind]
     moveState: Table[SymPath, BorrowState]
-    declRefKinds: Table[SymId, RefKind]
+    declTypes: Table[SymId, NifCursor]
+    fieldTypes: Table[SymId, Table[SymId, NifCursor]]
     inlineVars: Table[SymId, NifCursor]
     errorStack: seq[ErrorInstance]
 
@@ -77,12 +78,69 @@ proc refKindFromType(t: NifCursor): RefKind =
       return RefNotNil
   result = RefNilable
 
+proc stripTypeWrappers(t: NifCursor): NifCursor =
+  result = t
+  while result.typeKind in {SinkT, MutT, LentT, OutT}:
+    inc result
+
+proc declaredTypeBody(n: NifCursor): NifCursor =
+  result = n
+  if result.kind == TagLit:
+    inc result
+    skip result # export marker
+    skip result # pragmas
+    skip result # typevars/body prefix
+
+proc registerObjectFields(c: var BCContext; objSym: SymId; objBody: NifCursor) =
+  if objBody.kind != TagLit or objBody.typeKind != ObjectT:
+    return
+  var fields = initTable[SymId, NifCursor]()
+  var fieldCursor = firstChild(objBody)
+  skip fieldCursor # parent type / inheritance slot
+  while fieldCursor.hasMore:
+    if fieldCursor.kind == TagLit and fieldCursor.otherKind == FldU:
+      var field = firstChild(fieldCursor)
+      let fieldSym = field.symId
+      skip field # export marker
+      skip field # pragmas
+      let fieldType = field
+      fields[fieldSym] = fieldType
+    skip fieldCursor
+  c.fieldTypes[objSym] = fields
+
+proc collectTypeDecls(root: NifCursor; ctx: var BCContext) =
+  var n = root
+  if n.kind != TagLit:
+    return
+  n.loopInto:
+    case n.stmtKind
+    of TypeS:
+      let symNode = firstChild(n)
+      if symNode.kind == SymbolDef:
+        let sym = symNode.symId
+        let body = declaredTypeBody(n)
+        ctx.declTypes[sym] = body
+        if body.kind == TagLit and body.typeKind == ObjectT:
+          ctx.registerObjectFields(sym, body)
+    of VarS, LetS:
+      let symNode = firstChild(n)
+      if symNode.kind == SymbolDef:
+        var typ = symNode
+        skip typ
+        skip typ
+        skip typ
+        ctx.declTypes[symNode.symId] = typ
+    else:
+      discard
+    collectTypeDecls(n, ctx)
+    n.skip()
+
 proc addPathSegment(res: var SymPath; n: NifCursor) =
   res.path.add n.symId
   res.ty.add n.typeKind
 
-proc rootPath(sym: SymId; refKind: RefKind): SymPath =
-  result = SymPath(valid: true, path: @[sym], refKind: refKind)
+proc rootPath(sym: SymId): SymPath =
+  result = SymPath(valid: true, path: @[sym], refKind: NotARef)
 
 proc renderPath(path: SymPath): string =
   if path.path.len == 0:
@@ -142,20 +200,51 @@ proc extractPath(c: var BCContext; n: NifCursor; followInlineVars = true): SymPa
   extractPath(c, n, result, followInlineVars)
   if not result.valid or result.path.len == 0:
     result.valid = false
-    return
 
-  let root = result.path[0]
-  if n.kind == TagLit and isRefType(n):
-    result.refKind = refKindFromType(n)
-  elif root in c.declRefKinds:
-    result.refKind = c.declRefKinds.getOrDefault(root, NotARef)
-  elif result.ty.len > 0 and result.ty[^1] == RefT:
-    result.refKind = RefNilable
+proc resolveDeclaredType(c: BCContext; typ: NifCursor; owner: var SymId): NifCursor =
+  result = stripTypeWrappers(typ)
+  var guard = 0
+  while guard < 16:
+    if result.kind == Symbol and result.symId in c.declTypes:
+      owner = result.symId
+      result = stripTypeWrappers(c.declTypes.getOrDefault(result.symId, result))
+      inc guard
+    else:
+      break
+
+proc resolvePathKind(c: BCContext; path: SymPath): RefKind =
+  if path.path.len == 0:
+    return NotARef
+
+  var owner = path.path[0]
+  if owner notin c.declTypes:
+    return NotARef
+
+  var typ = resolveDeclaredType(c, c.declTypes.getOrDefault(owner, default(NifCursor)), owner)
+  if path.path.len == 1:
+    return if typ.kind == TagLit and typ.typeKind == RefT: refKindFromType(typ) else: NotARef
+
+  for i in 1 .. path.path.high:
+    if typ.kind == TagLit and typ.typeKind == RefT:
+      typ = stripTypeWrappers(firstChild(typ))
+      owner = SymId(0)
+      typ = resolveDeclaredType(c, typ, owner)
+    elif typ.typeKind == PtrT:
+      return NotARef
+
+    if typ.kind != TagLit or typ.typeKind != ObjectT or owner == SymId(0):
+      return NotARef
+
+    let fields = c.fieldTypes.getOrDefault(owner, default(Table[SymId, NifCursor]))
+    let fieldSym = path.path[i]
+    if fieldSym notin fields:
+      return NotARef
+    typ = resolveDeclaredType(c, fields.getOrDefault(fieldSym, default(NifCursor)), owner)
+
+  if typ.kind == TagLit and typ.typeKind == RefT:
+    result = refKindFromType(typ)
   else:
-    result.refKind = NotARef
-
-  if result.refKind == NotARef:
-    result.valid = false
+    result = NotARef
 
 proc isPrefix(a, b: SymPath): bool =
   ## Check if `a` is a (non-empty) prefix of `b`.
@@ -178,17 +267,14 @@ proc pathsOverlap(a, b: SymPath): bool =
 proc movePathsWithPrefix(ctx: var BCContext; prefix: SymPath, n: NifCursor) =
   ## When a path (or its root) is mutated, every fact about a longer path that
   ## shares this prefix (e.g. `a.next` when `a` is reassigned) is stale.
-  echo "moving pairs"
   for path, state in ctx.moveState.mpairs:
-    if isPrefix(prefix, path):
-      echo "match"
-      echo renderPath(path)
+    if path != prefix and isPrefix(prefix, path):
       state.kind = Moved
       state.pos = n
 
 proc isAnyMovedInPath(ctx: BCContext, path: SymPath): bool =
   for p, s in ctx.moveState:
-    if path.isPrefix(p):
+    if isPrefix(p, path):
       if s.kind == Moved: return true
 
   return false
@@ -220,9 +306,6 @@ proc collectLifetimes(root: NifCursor; ctx: var BCContext) =
         let sym = def.symId
         let kind = if n.stmtKind == VarS: VarK else: LetK
         ctx.varKinds[sym] = kind
-        let refKind = refKindFromType(typ)
-        ctx.declRefKinds[sym] = refKind
-        ctx.moveState[rootPath(sym, refKind)] = BorrowState(kind: Alive)
         ctx.lifetimes[sym] = Lifetime(creation: def.info, last: def.info)
     of NoStmt:
       let path = ctx.extractPath(n)
@@ -244,7 +327,6 @@ proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAs
   var n = r.getCursor()
   let info = n.info
   if path.valid and path.path.len > 0:
-    echo renderPath path
     let sym = path.path[0]
     if sym in ctx.lifetimes:
       var l = ctx.lifetimes.getOrDefault(sym)
@@ -252,30 +334,27 @@ proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAs
       if isAssign == LHSAsgn and l.creation != info:
         if vk == LetK:
           ctx.errorStack.add errorInstance("Can't modifiy an immutable let variable", n, n)
-        else:
-          ctx.moveState[path] = BorrowState(kind: Alive)
+    let moved = ctx.moveState.getOrDefault(path, BorrowState())
+    if isAnyMovedInPath(ctx, path):
+      ctx.errorStack.add errorInstance("Used after move here", r.getCursor, moved.pos)
+      return
 
-      echo ctx.moveState.getOrDefault(path, BorrowState()).kind
-      echo vk
-      echo l.creation != info
-      echo isAssign
+    let kind = resolvePathKind(ctx, path)
+    if kind != NotARef:
+      echo "path ref kind: " & $kind
 
-      if l.creation != info and vk == VarK:
-        let moved = ctx.moveState.getOrDefault(path, BorrowState())
-        if isAnyMovedInPath(ctx, path):
-          ctx.errorStack.add errorInstance("Used after move here", r.getCursor, moved.pos)
-        elif isAssign == RHSAsgn and path.ty[^1] == RefT:
-          movePathsWithPrefix ctx, path, n
-
-      echo ctx.moveState.getOrDefault(path, BorrowState()).kind
+    if isAssign == LHSAsgn:
+      ctx.moveState[path] = BorrowState(kind: Alive)
+      movePathsWithPrefix ctx, path, n
+    elif isAssign == RHSAsgn:
+      ctx.moveState[path] = BorrowState(kind: Moved, pos: n)
+      movePathsWithPrefix ctx, path, n
 
 proc checkMoves(r: var Replacer; ctx: var BCContext, isAssign = NoAsgn) =
   if r.isAtom:
     let n = r.getCursor
     if n.kind == Symbol:
-      echo "Symbols"
       let path = extractPath(ctx, n)
-      echo renderPath(path)
       checkPath(ctx, r, path, isAssign=isAssign)
     keep r, Any
   else:
@@ -310,6 +389,7 @@ proc checkMoves(r: var Replacer; ctx: var BCContext, isAssign = NoAsgn) =
 var ctx = BCContext()
 var r = loadReplacer()
 var scan = r.getCursor
+collectTypeDecls(scan, ctx)
 collectLifetimes(scan, ctx)
 loopKeepTag r:
   checkMoves(r, ctx)

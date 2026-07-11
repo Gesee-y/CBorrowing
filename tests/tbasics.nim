@@ -16,6 +16,6 @@ proc main() =
   echo p.right.x
   echo left.x
   echo p.left.x
-  echo 1
+  #echo 1
 
 main()
