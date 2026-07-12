@@ -12,5 +12,6 @@ proc main() =
   var n = p
   p = RefO()
   echo p.x
+  #echo 1
 
 main()

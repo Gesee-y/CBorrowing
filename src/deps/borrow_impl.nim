@@ -276,6 +276,13 @@ proc movePathsWithPrefix(ctx: var BCContext; prefix: SymPath, n: NifCursor) =
       state.kind = Moved
       state.pos = n
 
+proc relivePathsWithPrefix(ctx: var BCContext; prefix: SymPath, n: NifCursor) =
+  ## When a path (or its root) is mutated, every fact about a longer path that
+  ## shares this prefix (e.g. `a.next` when `a` is reassigned) is stale.
+  for path, state in ctx.moveState.mpairs:
+    if path != prefix and isPrefix(prefix, path):
+      state.kind = Alive
+
 proc isAnyMovedInPath(ctx: BCContext, path: SymPath): bool =
   for p, s in ctx.moveState:
     if isPrefix(p, path):
@@ -338,6 +345,15 @@ proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAs
       if isAssign == LHSAsgn and l.creation != info:
         if vk == LetK:
           ctx.errorStack.add errorInstance("Can't modifiy an immutable let variable", n, n)
+        else:
+          # Fix TRevive
+          # If it's an assignment and the LHS receive a new value but is not LetK
+          # Then it revive it
+          ctx.moveState[path] = BorrowState(kind: Alive)
+          relivePathsWithPrefix ctx, path, n
+
+    # Here we check is anything on the path to the variable is already moved
+    # And prevent use after move
     let moved = ctx.moveState.getOrDefault(path, BorrowState())
     if isAnyMovedInPath(ctx, path):
       ctx.errorStack.add errorInstance("Used after move here", r.getCursor, moved.pos)
@@ -347,10 +363,7 @@ proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAs
     if kind != NotARef:
       echo "path ref kind: " & $kind
 
-    if isAssign == LHSAsgn:
-      ctx.moveState[path] = BorrowState(kind: Alive)
-      movePathsWithPrefix ctx, path, n
-    elif isAssign == RHSAsgn:
+    if isAssign == RHSAsgn:
       ctx.moveState[path] = BorrowState(kind: Moved, pos: n)
       movePathsWithPrefix ctx, path, n
 
