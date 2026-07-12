@@ -1,11 +1,13 @@
 import std/[tables, syncio, hashes]
 import plugins
+import graph
 
 type
   RefKind = enum
     NotARef
     RefNilable
     RefNotNil
+    UnknownT
 
   SymPath = object
     valid: bool
@@ -69,6 +71,7 @@ proc refKindFromType(t: NifCursor): RefKind =
   var n = t
   while n.typeKind in {SinkT, MutT, LentT, OutT}:
     inc n
+
   if n.typeKind != RefT:
     return NotARef
   if n.kind == TagLit:
@@ -92,8 +95,9 @@ proc declaredTypeBody(n: NifCursor): NifCursor =
     skip result # typevars/body prefix
 
 proc registerObjectFields(c: var BCContext; objSym: SymId; objBody: NifCursor) =
-  if objBody.kind != TagLit or objBody.typeKind != ObjectT:
+  if objBody.kind != TagLit:
     return
+
   var fields = initTable[SymId, NifCursor]()
   var fieldCursor = firstChild(objBody)
   skip fieldCursor # parent type / inheritance slot
@@ -214,11 +218,11 @@ proc resolveDeclaredType(c: BCContext; typ: NifCursor; owner: var SymId): NifCur
 
 proc resolvePathKind(c: BCContext; path: SymPath): RefKind =
   if path.path.len == 0:
-    return NotARef
+    return UnknownT
 
   var owner = path.path[0]
   if owner notin c.declTypes:
-    return NotARef
+    return UnknownT
 
   var typ = resolveDeclaredType(c, c.declTypes.getOrDefault(owner, default(NifCursor)), owner)
   if path.path.len == 1:
@@ -238,7 +242,7 @@ proc resolvePathKind(c: BCContext; path: SymPath): RefKind =
     let fields = c.fieldTypes.getOrDefault(owner, default(Table[SymId, NifCursor]))
     let fieldSym = path.path[i]
     if fieldSym notin fields:
-      return NotARef
+      return UnknownT
     typ = resolveDeclaredType(c, fields.getOrDefault(fieldSym, default(NifCursor)), owner)
 
   if typ.kind == TagLit and typ.typeKind == RefT:
