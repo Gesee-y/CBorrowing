@@ -334,11 +334,12 @@ proc collectLifetimes(root: NifCursor; ctx: var BCContext) =
     collectLifetimes(n, ctx)
     n.skip()
 
-proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAsgn) =
+proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAsgn, isLet=false) =
   var n = r.getCursor()
   let info = n.info
   if path.valid and path.path.len > 0:
     let sym = path.path[0]
+    let kind = resolvePathKind(ctx, path)
     if sym in ctx.lifetimes:
       var l = ctx.lifetimes.getOrDefault(sym)
       let vk = ctx.varKinds.getOrDefault(sym)
@@ -352,6 +353,11 @@ proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAs
           ctx.moveState[path] = BorrowState(kind: Alive)
           relivePathsWithPrefix ctx, path, n
 
+      # If we are assigning, we are on the RHS which has been declared as let
+      # And try to assign it to a var variable while the data we are trying to assign is not a ref
+      elif isAssign == RHSAsgn and vk == LetK and not isLet and kind != NotARef:
+        ctx.errorStack.add errorInstance("Can't assign an immutable let variable to a var.", n, n)
+
     # Here we check is anything on the path to the variable is already moved
     # And prevent use after move
     let moved = ctx.moveState.getOrDefault(path, BorrowState())
@@ -359,7 +365,6 @@ proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAs
       ctx.errorStack.add errorInstance("Used after move here", r.getCursor, moved.pos)
       return
 
-    let kind = resolvePathKind(ctx, path)
     if kind != NotARef:
       echo "path ref kind: " & $kind
 
@@ -367,12 +372,12 @@ proc checkPath(ctx: var BCContext, r: var Replacer, path: SymPath, isAssign=NoAs
       ctx.moveState[path] = BorrowState(kind: Moved, pos: n)
       movePathsWithPrefix ctx, path, n
 
-proc checkMoves(r: var Replacer; ctx: var BCContext, isAssign = NoAsgn) =
+proc checkMoves(r: var Replacer; ctx: var BCContext, isAssign = NoAsgn, isLet=false) =
   if r.isAtom:
     let n = r.getCursor
     if n.kind == Symbol:
       let path = extractPath(ctx, n)
-      checkPath(ctx, r, path, isAssign=isAssign)
+      checkPath(ctx, r, path, isAssign=isAssign, isLet=isLet)
     keep r, Any
   else:
     if r.kind == TagLit:
@@ -381,7 +386,7 @@ proc checkMoves(r: var Replacer; ctx: var BCContext, isAssign = NoAsgn) =
         var n = r.getCursor()
         let info = n.info
         let path = extractPath(ctx, r.getCursor)
-        checkPath(ctx, r, path, isAssign=isAssign)
+        checkPath(ctx, r, path, isAssign=isAssign, isLet=isLet)
       else:
         discard
     case r.stmtKind
@@ -396,8 +401,9 @@ proc checkMoves(r: var Replacer; ctx: var BCContext, isAssign = NoAsgn) =
       replace r, Any, stmt
     of VarS, LetS:
       var cnt = 0
+      let isLet = r.stmtKind == LetS
       loopKeepTag r:
-        checkMoves(r, ctx, isAssign = if cnt > 0: RHSAsgn else: NoAsgn)
+        checkMoves(r, ctx, isAssign = if cnt > 0: RHSAsgn else: NoAsgn, isLet=isLet)
         cnt += 1
     else:
       loopKeepTag r:
