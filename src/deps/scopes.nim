@@ -37,6 +37,10 @@ proc getOwnerScope(c: ScopeNode, path: string): ScopeNode =
 proc getOwnerScope(c: ScopeNode, path: SymPath): ScopeNode =
   return c.getOwnerScope(renderPath(path))
 
+proc addPathSegment(res: var SymPath; n: NifCursor) =
+  res.path.add n.symId
+  res.ty.add n.typeKind
+
 proc extractPath(c: var ScopeNode; n: NifCursor; res: var SymPath; followInlineVars = true) =
   if not res.valid:
     return
@@ -84,6 +88,9 @@ proc extractPath(c: var BCContext; n: NifCursor; followInlineVars = true): SymPa
   extractPath(c, n, result, followInlineVars)
   if not result.valid or result.path.len == 0:
     result.valid = false
+
+proc rootPath(sym: SymId): SymPath =
+  result = SymPath(valid: true, path: @[sym], refKind: NotARef)
 
 proc collectVarData(scope: var ScopeNode, root: NifCursor, cache: TypeCache) =
   var n = root
