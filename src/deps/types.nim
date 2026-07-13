@@ -22,6 +22,7 @@ type
 
   # Describe field of a type
   TypeField* = object
+    name: string
     ty: string
     raw: NifCursor
     subinfo: set[TypeFlag]
@@ -32,7 +33,8 @@ type
     name: string
     kind: TypeKind
     raw: NifCursor
-    fields: Table[string, TypeField]
+    nameToId: Table[string, int]
+    fields: seq[TypeField]
 
   # Type cache, a global structure bookeeping informations about types
   TypeCache* = object
@@ -104,6 +106,11 @@ proc addInstance(c: var TypeCache, instance: TypeInst) =
   c.nameToId[instance.name] = id
   c.instances.add(instance)
 
+proc addField(t: var TypeInst, field: TypeField) =
+  let id = t.fields.len
+  t.nameToId[field.name] = id
+  t.fields.add(field)
+
 proc declaredTypeBody(n: NifCursor): NifCursor =
   result = n
   if result.kind == TagLit:
@@ -141,7 +148,8 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
 
           f.ty = fieldTyName
           f.raw = fieldType
-          result.fields[fieldName] = f
+          f.name = fieldName
+          result.addField f
         skip fieldCursor
 
 # Directly get informations about procs
@@ -179,7 +187,8 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
 
           f.ty = fieldTyName
           f.raw = fieldType
-          result.fields[fieldName] = f
+          f.name = fieldName
+          result.addField f
         skip fieldCursor
 
 proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
@@ -200,3 +209,52 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
       discard
     collectTypeDecls(c, n)
     n.skip()
+
+# ######################################################################################################## #
+# ############################################### Query API ############################################## #
+# ######################################################################################################## #
+
+proc getType*(c: TypeCache, root: TypeInst, additional: seq[string] = @[]): TypeInst =
+  # Fetch the concrete type following a given path
+  var inst = root
+
+  for f in additional:
+    let fid = inst.nameToId.getOrDefault(f, -1)
+    if fid == -1: return TypeInst(kind: UnknownType)
+    let field = inst.fields[fid]
+
+    ty = c.nameToId.getOrDefault(field.ty, -1)
+    if ty == -1: return TypeInst(kind: UnknownType)
+    inst = c.instances[ty]
+
+  return inst
+
+proc getType*(c: TypeCache, root: TypeInst, idx: int = 0): TypeInst =
+  # Fetch the concrete type following a given position
+  # Useful for function the `idx`-th parameter
+  var inst = root
+  if idx < inst.fields.len:
+    let field = inst.fields[idx]
+
+    ty = c.nameToId.getOrDefault(field.ty, -1)
+    if ty == -1: return TypeInst(kind: UnknownType)
+    inst = c.instances[ty]
+
+  return inst
+
+proc getType*(c: TypeCache, root: string, additional: seq[string] = @[]): TypeInst =
+  # Fetch the concrete type following a given path
+  var ty = c.nameToId.getOrDefault(root, -1)
+  if ty == -1: return TypeInst(kind: UnknownType)
+
+  var inst = c.instances[ty]
+  return inst.getType(additional)
+
+proc getType*(c: TypeCache, root: string, idx: int = 0): TypeInst =
+  # Fetch the concrete type following a given position
+  # Useful for function the `idx`-th parameter
+  var ty = c.nameToId.getOrDefault(root, -1)
+  if ty == -1: return TypeInst(kind: UnknownType)
+
+  var inst = c.instances[ty]
+  return inst.getType(idx)
