@@ -128,10 +128,13 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
 proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
   result = TypeInst()
   result.raw = pDef
+  result.kind = ProcType
 
   let symNode = firstChild(pDef) # Definition of the proc
   if symNode.kind == SymbolDef:
     let name = symNode.symText
+
+    result.name = name
 
     # Skip directly to parameters
     skip symNode
@@ -168,7 +171,7 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
       let tyDef = n
       let instance = addTypeInstance(tyDef)
       c.addInstance(instance)
-    of ProcS:
+    of ProcS, FuncS:
       let pDef = n
       let instance = addProcTypeInstance(pDef)
       c.addInstance(instance)
