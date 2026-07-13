@@ -47,10 +47,10 @@ proc stripTypeWrappers*(t: NifCursor): NifCursor =
   while result.typeKind in {SinkT, MutT, LentT, OutT}:
     inc result
 
-proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]): NifCursor =
-  result = t
-  while result.typeKind in {SinkT, MutT, LentT, OutT}:
-    case result.typeKind:
+proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]) =
+  var n = t
+  while var n.typeKind in {SinkT, MutT, LentT, OutT}:
+    case var n.typeKind:
     of SinkT:
       flags.incl SinkF
     of MutT:
@@ -60,7 +60,7 @@ proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]): NifCursor =
     of OutT:
       flags.inclu OutF
     else: discard
-    inc result
+    inc var n
 
 proc getRawTypeKind*(t: NifCursor): TypeKind =
   var n = stripTypeWrappers(t)
