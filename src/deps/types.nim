@@ -1,4 +1,5 @@
 
+import std/tables
 
 type
   # Describe which kind of type we are dealing with
@@ -49,7 +50,7 @@ proc stripTypeWrappers*(t: NifCursor): NifCursor =
 
 proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]) =
   var n = t
-  while var n.typeKind in {SinkT, MutT, LentT, OutT}:
+  while n.typeKind in {SinkT, MutT, LentT, OutT}:
     case var n.typeKind:
     of SinkT:
       flags.incl SinkF
@@ -58,7 +59,7 @@ proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]) =
     of LentT:
       flags.incl LentF
     of OutT:
-      flags.inclu OutF
+      flags.incl OutF
     else: discard
     inc var n
 
@@ -80,17 +81,17 @@ proc getRawTypeKind*(t: NifCursor): TypeKind =
   else:
     result = ObjectType
 
-proc isRefType*(t: NifCursor): bool =
+proc isRefType*(n: NifCursor): bool =
   n.getRawTypeKind == RefType
 
-proc getSubTypeInfo*(t: NifCursor): set[TypeFlag] =
+proc getSubTypeInfo*(n: NifCursor): set[TypeFlag] =
   # Assume modifiers have already been stripped away
   result = default(set[TypeFlag])
   if n.kind == TagLit:
     var marker = firstChild(n)
     skip marker
 
-    if marker.hasMore and marker.otherKind == NotnilU:
+    if marker.hasMore and marker.otherKind in {NotnilU, NilU}:
       case marker.otherKind:
       of NotnilU:
         result.incl NotNilF
@@ -125,7 +126,7 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
     result.kind = tyKind
 
     if body.kind == TagLit and tyKind in {ObjectType, RefType}:
-      var fieldCursor = firstChild(objBody)
+      var fieldCursor = firstChild(body)
       skip fieldCursor # parent type / inheritance slot, skip for now
       while fieldCursor.hasMore:
         if fieldCursor.kind == TagLit and fieldCursor.otherKind == FldU:
@@ -162,7 +163,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
 
     let body = symNode
     if body.otherKind == ParamsU:
-      var fieldCursor = firstChild(objBody)
+      var fieldCursor = firstChild(body)
 
       while fieldCursor.hasMore:
         if fieldCursor.symKind == ParamY:
