@@ -214,12 +214,9 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
 # ############################################### Query API ############################################## #
 # ######################################################################################################## #
 
-proc getType(c: TypeCache, root: string, additional: seq[string] = @[]): TypeInst =
+proc getType*(c: TypeCache, root: TypeInst, additional: seq[string] = @[]): TypeInst =
   # Fetch the concrete type following a given path
-  var ty = c.nameToId.getOrDefault(root, -1)
-  if ty == -1: return TypeInst(kind: UnknownType)
-
-  var inst = c.instances[ty]
+  var inst = root
 
   for f in additional:
     let fid = inst.nameToId.getOrDefault(f, -1)
@@ -232,13 +229,10 @@ proc getType(c: TypeCache, root: string, additional: seq[string] = @[]): TypeIns
 
   return inst
 
-proc getType(c: TypeCache, root: string, idx: int = 0): TypeInst =
+proc getType*(c: TypeCache, root: TypeInst, idx: int = 0): TypeInst =
   # Fetch the concrete type following a given position
   # Useful for function the `idx`-th parameter
-  var ty = c.nameToId.getOrDefault(root, -1)
-  if ty == -1: return TypeInst(kind: UnknownType)
-
-  var inst = c.instances[ty]
+  var inst = root
   if idx < inst.fields.len:
     let field = inst.fields[idx]
 
@@ -247,3 +241,20 @@ proc getType(c: TypeCache, root: string, idx: int = 0): TypeInst =
     inst = c.instances[ty]
 
   return inst
+
+proc getType*(c: TypeCache, root: string, additional: seq[string] = @[]): TypeInst =
+  # Fetch the concrete type following a given path
+  var ty = c.nameToId.getOrDefault(root, -1)
+  if ty == -1: return TypeInst(kind: UnknownType)
+
+  var inst = c.instances[ty]
+  return inst.getType(additional)
+
+proc getType*(c: TypeCache, root: string, idx: int = 0): TypeInst =
+  # Fetch the concrete type following a given position
+  # Useful for function the `idx`-th parameter
+  var ty = c.nameToId.getOrDefault(root, -1)
+  if ty == -1: return TypeInst(kind: UnknownType)
+
+  var inst = c.instances[ty]
+  return inst.getType(idx)
