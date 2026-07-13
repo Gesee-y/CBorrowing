@@ -240,7 +240,7 @@ proc getType(c: TypeCache, root: string, idx: int = 0): TypeInst =
 
   var inst = c.instances[ty]
   if idx < inst.fields.len:
-    let field = inst.fields[fid]
+    let field = inst.fields[idx]
 
     ty = c.nameToId.getOrDefault(field.ty, -1)
     if ty == -1: return TypeInst(kind: UnknownType)
