@@ -18,6 +18,7 @@ type
   # Describe field of a type
   TypeField* = object
     ty: string
+    raw: NifCursor
     subinfo: set[TypeFlag]
 
   # An instance of a type.
@@ -78,6 +79,11 @@ proc getSubTypeInfo*(t: NifCursor): set[TypeFlag] =
         result.incl NilF
       else: discard
 
+proc addInstance(c: var TypeCache, instance: TypeInst) =
+  let id = c.instances.len
+  c.nameToId[instance.name] = id
+  c.instances.add(instance)
+
 proc declaredTypeBody(n: NifCursor): NifCursor =
   result = n
   if result.kind == TagLit:
@@ -100,10 +106,6 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
     result.kind = tyKind
 
     if body.kind == TagLit and tyKind in {ObjectType, RefType}:
-
-      if objBody.kind != TagLit:
-        return
-
       var fieldCursor = firstChild(objBody)
       skip fieldCursor # parent type / inheritance slot, skip for now
       while fieldCursor.hasMore:
@@ -118,6 +120,41 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
           let fieldTyName = fieldType.symText
 
           f.ty = fieldTyName
+          f.raw = fieldType
+          result.fields[fieldName] = f
+        skip fieldCursor
+
+# Directly get informations about procs
+proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
+  result = TypeInst()
+  result.raw = pDef
+
+  let symNode = firstChild(pDef) # Definition of the proc
+  if symNode.kind == SymbolDef:
+    let name = symNode.symText
+
+    # Skip directly to parameters
+    skip symNode
+    skip symNode
+    skip symNode
+
+    let body = symNode
+    if body.otherKind == ParamsU:
+      var fieldCursor = firstChild(objBody)
+
+      while fieldCursor.hasMore:
+        if fieldCursor.symKind == ParamY:
+          var f = TypeField()
+          var field = firstChild(fieldCursor)
+          let fieldName = field.symText
+          let fieldSym = field.symId
+          skip field # export marker
+          skip field # pragmas
+          let fieldType = field
+          let fieldTyName = fieldType.symText
+
+          f.ty = fieldTyName
+          f.raw = fieldType
           result.fields[fieldName] = f
         skip fieldCursor
 
@@ -130,9 +167,11 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
     of TypeS:
       let tyDef = n
       let instance = addTypeInstance(tyDef)
-      let id = c.instances.len
-      c.nameToId[instance.name] = id
-      c.instances.add(instance)
+      c.addInstance(instance)
+    of ProcS:
+      let pDef = n
+      let instance = addProcTypeInstance(pDef)
+      c.addInstance(instance)
     else:
       discard
     collectTypeDecls(c, n)
