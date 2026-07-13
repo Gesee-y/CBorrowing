@@ -13,7 +13,6 @@ type
     valid: bool
     path: seq[SymId]
     ty: seq[NimonyType]
-    refKind: RefKind
 
 func hash(s: SymPath): Hash =
   var h: Hash = 0
