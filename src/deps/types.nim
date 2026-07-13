@@ -14,14 +14,18 @@ type
     NilF
     NotNilF
 
+  # Describe field of a type
+  TypeField* = object
+    ty: string
+    subinfo: set[TypeFlag]
+
   # An instance of a type.
   # It's obtained from a type declaration
   TypeInst* = object
     name: string
     kind: TypeKind
-    subinfo: set[TypeFlag]
     raw: NifCursor
-    fields: Table[string, string]
+    fields: Table[string, TypeField]
 
   # Type cache, a global structure bookeeping informations about types
   TypeCache* = object
@@ -101,6 +105,7 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
       skip fieldCursor # parent type / inheritance slot, skip for now
       while fieldCursor.hasMore:
         if fieldCursor.kind == TagLit and fieldCursor.otherKind == FldU:
+          var f = TypeField()
           var field = firstChild(fieldCursor)
           let fieldName = field.symText
           let fieldSym = field.symId
@@ -108,7 +113,9 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
           skip field # pragmas
           let fieldType = field
           let fieldTyName = fieldType.symText
-          result.fields[fieldName] = fieldTyName
+
+          f.ty = fieldTyName
+          result.fields[fieldName] = f
         skip fieldCursor
 
 proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
