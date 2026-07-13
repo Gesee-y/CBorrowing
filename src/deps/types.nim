@@ -7,6 +7,7 @@ type
     ObjectType
     PrimitiveType
     EnumType
+    ProcType
     UnknownType
 
   # Annotation currently seen on the type
@@ -50,6 +51,8 @@ proc getRawTypeKind*(t: NifCursor): TypeKind =
    result = RefType
   of EnumT:
    result = EnumType
+  of ProcT, TemplateT, MethodT, IteratorT:
+    result = ProcType
   of IT, FT, CT, UT, BoolT:
     result = PrimitiveType
   of NoType, UntypedT, TypedT, AutoT:
