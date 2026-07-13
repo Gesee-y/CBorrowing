@@ -14,6 +14,10 @@ type
   TypeFlag* = enum
     NilF
     NotNilF
+    VarF
+    LentF
+    SinkF
+    OutF
 
   # Describe field of a type
   TypeField* = object
@@ -41,6 +45,21 @@ type
 proc stripTypeWrappers*(t: NifCursor): NifCursor =
   result = t
   while result.typeKind in {SinkT, MutT, LentT, OutT}:
+    inc result
+
+proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]): NifCursor =
+  result = t
+  while result.typeKind in {SinkT, MutT, LentT, OutT}:
+    case result.typeKind:
+    of SinkT:
+      flags.incl SinkF
+    of MutT:
+      flags.incl VarF
+    of LentT:
+      flags.incl LentF
+    of OutT:
+      flags.inclu OutF
+    else: discard
     inc result
 
 proc getRawTypeKind*(t: NifCursor): TypeKind =
@@ -155,6 +174,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
           skip field # pragmas
           let fieldType = field
           let fieldTyName = fieldType.symText
+          recordTypeWrappers(fieldType, f.subinfo)
 
           f.ty = fieldTyName
           f.raw = fieldType
