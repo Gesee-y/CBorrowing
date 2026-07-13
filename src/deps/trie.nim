@@ -3,66 +3,69 @@
 # ########################################################################################################## #
 
 type
-  TNode[T] = object
-    data: T
+  TNode = object
+    data: Variable
     parent: int
     children: Table[string, int]
 
-  Trie[T] = object
-    nodes: seq[TNode[T]]
-    roots: TNode[T]
+  Trie = object
+    nodes: seq[TNode]
+    roots: TNode
 
-proc newTrie[T](): Trie[T] =
-  result = Trie[T](parent: -1)
-  result.nodes.add(default(TNode[T]))
+proc newTrie(): Trie =
+  result = Trie()
+  result.nodes.add(TNode(parent: -1))
 
-proc addNode[T](t: Trie[T], data: string): int =
+proc addNode(t: var Trie, data: string): int =
   var root = 0
   if data in t.nodes[root].children:
-    root = t.nodes[root].children.getOrDefault(data)
+    root = t.nodes[root].children.getOrDefault(data, 0)
   else:
     let n = t.nodes.len
-    t.nodes.add(TNode[T](name: data, parent: root))
+    t.nodes.add(TNode(parent: root))
     t.nodes[root].children[data] = n
     root = n
 
   return root
 
-proc addNode[T](t: Trie[T], data: seq[string]): int =
-  if data.len <= 0: return
+proc addNode(t: var Trie, data: seq[string]): int =
+  result = 0
+  if data.len <= 0: return -1
 
-  var root = 0
   for d in data:
-    if d in t.nodes[root].children:
-      root = t.nodes[root].children.getOrDefault(d)
+    if d in t.nodes[result].children:
+      result = t.nodes[result].children.getOrDefault(d)
     else:
       let n = t.nodes.len
-      t.nodes.add(TNode[T](name: d, parent: root))
-      t.nodes[root].children[d] = n
-      root = n
+      t.nodes.add(TNode(parent: result))
+      t.nodes[result].children[d] = n
+      result = n
 
-  return root
 
-proc fetchNode[T](t: Trie[T], data: seq[string]): int =
+proc fetchNode(t: Trie, data: seq[string]): int =
   if data.len <= 0: return -1
 
   result = 0
   for d in data:
     result = t.nodes[result].children.getOrQuit(d)
 
-proc fetchNode[T](t: Trie[T], data: string): int =
+proc fetchNode(t: Trie, data: string): int =
   result = t.nodes[0].children.getOrDefault(data, -1)
 
-proc getAllSuffix[T](t: Trie[T], node: TNode[T], stack: var seq[int]): int =
+proc getAllSuffix(t: Trie, node: TNode, stack: var seq[int]) =
   for v in node.children.values:
     stack.add(v)
-    t.getAllSuffixSuffix(t.nodes[v], stack)
+    t.getAllSuffix(t.nodes[v], stack)
 
-iterator iterateSuffix[T](t: Trie[T], node: TNode[T]): int =
-  for v in t.getAllSuffix(node):
+iterator iterateSuffix(t: Trie, node: TNode): int {.sideEffect.} =
+  var stack: seq[int] = @[]
+  t.getAllSuffix(node, stack)
+  for v in stack:
     yield v
 
-iterator iterateSuffix[T](t: Trie[T], data: seq[string]): int =
+iterator iterateSuffix(t: Trie, data: seq[string]): int {.sideEffect.} =
   let node = t.fetchNode(data)
-  for v in t.iterateSuffix(node):
+  var stack: seq[int] = @[]
+  t.getAllSuffix(t.nodes[node], stack)
+  for v in stack:
     yield v

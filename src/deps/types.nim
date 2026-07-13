@@ -53,7 +53,7 @@ proc stripTypeWrappers*(t: NifCursor): NifCursor =
 proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]) =
   var n = t
   while n.typeKind in {SinkT, MutT, LentT, OutT}:
-    case var n.typeKind:
+    case n.typeKind:
     of SinkT:
       flags.incl SinkF
     of MutT:
@@ -63,7 +63,7 @@ proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]) =
     of OutT:
       flags.incl OutF
     else: discard
-    inc var n
+    inc n
 
 proc getRawTypeKind*(t: NifCursor): TypeKind =
   var n = stripTypeWrappers(t)
@@ -158,7 +158,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
   result.raw = pDef
   result.kind = ProcType
 
-  let symNode = firstChild(pDef) # Definition of the proc
+  var symNode = firstChild(pDef) # Definition of the proc
   if symNode.kind == SymbolDef:
     let name = symNode.symText
 
@@ -174,7 +174,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
       var fieldCursor = firstChild(body)
 
       while fieldCursor.hasMore:
-        if fieldCursor.symKind == ParamY:
+        if fieldCursor.exprKind != DotX:
           var f = TypeField()
           var field = firstChild(fieldCursor)
           let fieldName = field.symText
@@ -214,7 +214,7 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
 # ############################################### Query API ############################################## #
 # ######################################################################################################## #
 
-proc getType*(c: TypeCache, root: TypeInst, additional: seq[string] = @[]): TypeInst =
+proc getType*(c: TypeCache, root: TypeInst, additional: seq[string]): TypeInst =
   # Fetch the concrete type following a given path
   var inst = root
 
@@ -223,38 +223,45 @@ proc getType*(c: TypeCache, root: TypeInst, additional: seq[string] = @[]): Type
     if fid == -1: return TypeInst(kind: UnknownType)
     let field = inst.fields[fid]
 
-    ty = c.nameToId.getOrDefault(field.ty, -1)
+    var ty = c.nameToId.getOrDefault(field.ty, -1)
     if ty == -1: return TypeInst(kind: UnknownType)
     inst = c.instances[ty]
 
   return inst
 
-proc getType*(c: TypeCache, root: TypeInst, idx: int = 0): TypeInst =
+proc getType*(c: TypeCache, root: TypeInst, idx: int): TypeInst =
   # Fetch the concrete type following a given position
   # Useful for function the `idx`-th parameter
   var inst = root
   if idx < inst.fields.len:
     let field = inst.fields[idx]
 
-    ty = c.nameToId.getOrDefault(field.ty, -1)
+    var ty = c.nameToId.getOrDefault(field.ty, -1)
     if ty == -1: return TypeInst(kind: UnknownType)
     inst = c.instances[ty]
 
   return inst
 
-proc getType*(c: TypeCache, root: string, additional: seq[string] = @[]): TypeInst =
+proc getType*(c: TypeCache, root: string): TypeInst =
+  # Fetch the concrete type following a given path
+  var ty = c.nameToId.getOrDefault(root, -1)
+  if ty == -1: return TypeInst(kind: UnknownType)
+
+  return c.instances[ty]
+
+proc getType*(c: TypeCache, root: string, additional: seq[string]): TypeInst =
   # Fetch the concrete type following a given path
   var ty = c.nameToId.getOrDefault(root, -1)
   if ty == -1: return TypeInst(kind: UnknownType)
 
   var inst = c.instances[ty]
-  return inst.getType(additional)
+  return c.getType(inst, additional)
 
-proc getType*(c: TypeCache, root: string, idx: int = 0): TypeInst =
+proc getType*(c: TypeCache, root: string, idx: int): TypeInst =
   # Fetch the concrete type following a given position
   # Useful for function the `idx`-th parameter
   var ty = c.nameToId.getOrDefault(root, -1)
   if ty == -1: return TypeInst(kind: UnknownType)
 
   var inst = c.instances[ty]
-  return inst.getType(idx)
+  return c.getType(inst, idx)
