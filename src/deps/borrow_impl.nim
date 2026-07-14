@@ -56,17 +56,12 @@ proc errorInstance(msg: string; at, orig: NifCursor): ErrorInstance =
 include "types.nim"
 include "scopes.nim"
 
-type
-  BCContext = object
-    cache: TypeCache
-    scope: ScopeNode
-
-var ctx = BCContext()
+var ctx = BCContext(scopes: @[ScopeNode(parent: -1, id: 0)])
 var r = loadReplacer()
 var scanTy = r.getCursor
 var scanVar = r.getCursor
 collectTypeDecls(ctx.cache, scanTy)
-#collectVarData(ctx.scope, scanVar, ctx.cache)
+collectVarData(ctx, 0, scanVar)
 
 for k,v in ctx.cache.nameToId:
   echo "Type " & k & " maps to " & $v
