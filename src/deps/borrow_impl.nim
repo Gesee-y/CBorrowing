@@ -7,6 +7,8 @@ type
     path: seq[SymId]
     ty: seq[NimonyType]
 
+const PATH_SEPARATOR = "::"
+
 func hash(s: SymPath): Hash =
   var h: Hash = 0
   for item in s.path:
@@ -29,7 +31,7 @@ proc renderPath(path: SymPath): string =
     return "<path>"
   result = symText(path.path[0])
   for i in 1 .. path.path.high:
-    result.add '.'
+    result.add PATH_SEPARATOR
     result.add symText(path.path[i])
 
 type
@@ -56,7 +58,7 @@ proc errorInstance(msg: string; at, orig: NifCursor): ErrorInstance =
 include "types.nim"
 include "scopes.nim"
 
-var ctx = BCContext(scopes: @[ScopeNode(parent: -1, id: 0)])
+var ctx = BCContext(scopes: @[ScopeNode(parent: -1, id: 0, variables: newTrie())])
 var r = loadReplacer()
 var scanTy = r.getCursor
 var scanVar = r.getCursor

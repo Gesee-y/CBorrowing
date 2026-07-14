@@ -47,7 +47,8 @@ proc fetchNode(t: Trie, data: seq[string]): int =
 
   result = 0
   for d in data:
-    result = t.nodes[result].children.getOrQuit(d)
+    result = t.nodes[result].children.getOrDefault(d, -1)
+    if result == -1: return
 
 proc fetchNode(t: Trie, data: string): int =
   result = t.nodes[0].children.getOrDefault(data, -1)

@@ -37,15 +37,20 @@ type
 proc getOwnerScope(ctx: BCContext, scope: ScopeNode, path: seq[string]): int =
   result = scope.id
   var parent = scope.parent
-  while ctx.scopes[result].variables.fetchNode(path) == -1:
-    if parent != -1:
+  while true:
+    let id = ctx.scopes[result].variables.fetchNode(path)
+
+    if id == -1 and parent != -1:
       result = ctx.scopes[parent].id
       parent = ctx.scopes[parent].parent
+    elif parent == -1 and id == -1:
+      result = -1
+      break
     else:
       break
 
 proc getOwnerScope(ctx: BCContext, c: ScopeNode, path: string): int =
-  return ctx.getOwnerScope(c, path.split("."))
+  return ctx.getOwnerScope(c, path.split(PATH_SEPARATOR))
 
 proc getOwnerScope(ctx: BCContext, c: ScopeNode, path: SymPath): int =
   return ctx.getOwnerScope(c, renderPath(path))
@@ -88,7 +93,7 @@ proc extractPath(c: var ScopeNode; n: NifCursor; res: var SymPath; followInlineV
       res.valid = false
     else:
       res.valid = false
-  of Symbol:
+  of Symbol, SymbolDef:
     let s = n.symId
     addPathSegment(res, n)
   of IntLit, UIntLit, CharLit, FloatLit, StrLit, DotToken:
@@ -105,22 +110,30 @@ proc extractPath(c: var ScopeNode; n: NifCursor; followInlineVars = true): SymPa
 proc rootPath(sym: SymId): SymPath =
   result = SymPath(valid: true, path: @[sym])
 
-proc collectVarData(ctx: var BCContext, id: int, root: NifCursor) =
+proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
   var n = root
-  var current = id
+  var current = nid
+  var recurse = true
   var newS = false
 
-  echo n.kind
-  if n.kind != TagLit:
-    let path = ctx.scopes[id].extractPath(n)
-    let root = path.path[0].symText
-    echo renderPath(path)
-    if path.valid and path.path.len > 0:
-      let strPath = renderPath(path)
+  echo "kind = ", n.kind
 
-      var ownerScope = addr ctx.scopes[ctx.getOwnerScope(ctx.scopes[id], root)]
+  if n.kind != TagLit or n.exprKind in {DotX, DdotX, HderefX}:
+    let path = ctx.scopes[current].extractPath(n)
+    if path.valid and path.path.len > 0:
+      let root = path.path[0].symText
+      let strPath = renderPath(path)
+      echo strPath
+      echo current
+      echo ctx.scopes.len
+
+      let scopeId = ctx.getOwnerScope(ctx.scopes[current], root)
+      echo scopeId
+      if scopeId == -1: return
+      var ownerScope = addr ctx.scopes[scopeId]
+
       let rv = ownerScope.variables.fetchNode(root)
-      var id = ownerScope.variables.fetchNode(strPath.split("."))
+      var id = ownerScope.variables.fetchNode(strPath.split(PATH_SEPARATOR))
 
       if id != -1:
         try:
@@ -129,40 +142,48 @@ proc collectVarData(ctx: var BCContext, id: int, root: NifCursor) =
           discard
       else:
         var v = Variable(name: strPath, kind: ownerScope.variables.nodes[rv].data.kind,
-          ty: ctx.cache.getType(ownerScope.variables.nodes[rv].data.ty, strPath.split(".")[1..^1]),
+          ty: ctx.cache.getType(ownerScope.variables.nodes[rv].data.ty, strPath.split(PATH_SEPARATOR)[1..^1]),
           liveness: Liveness(birth: n))
         v.liveness.uses.add(n)
 
-        id = ownerScope.variables.addNode(strPath.split("."))
+        id = ownerScope.variables.addNode(strPath.split("::"))
         ownerScope.variables.nodes[id].data = v
 
       ownerScope.variables.nodes[id].data.state = BorrowState(kind: Alive)
 
+    return
+
   n.loopInto:
-    echo n.stmtKind
+    echo "stmtKind = ", n.stmtKind
     case n.stmtKind
     of VarS, LetS:
       let symNode = firstChild(n)
       let kind = if n.stmtKind == VarS: VarK else: LetK
       if symNode.kind == SymbolDef:
         var typ = symNode
+        echo "in"
         var name = symNode.symText
+        echo name
         skip typ
         skip typ
         skip typ
-        let inst = ctx.cache.getType(typ.symText)
+        let inst = ctx.cache.getType(firstChild(typ).getTypeName)
         let v = Variable(kind: kind, ty: inst, name: symNode.symText, liveness: Liveness(birth: n))
         let id = ctx.scopes[current].variables.addNode(name)
         ctx.scopes[current].variables.nodes[id].data = v
     of StmtsS, BlockS:
-      var newNode = ScopeNode(id: ctx.scopes.len, parent: current)
+      var newNode = ScopeNode(id: ctx.scopes.len, parent: current, variables: newTrie())
       ctx.scopes[current].children.add(newNode.id)
       ctx.scopes.add(newNode)
       current = newNode.id
       newS = true
+    of TypeS:
+      recurse = false
     else:
       discard
-    collectVarData(ctx, current, n)
+    if recurse: collectVarData(ctx, current, n)
+    recurse = true
+
     if newS:
       let parent = ctx.scopes[current].parent
       if parent != -1:
@@ -176,7 +197,7 @@ proc collectVarData(ctx: var BCContext, id: int, root: NifCursor) =
 proc movePathsWithPrefix(ctx: var ScopeNode; prefix: SymPath, n: NifCursor) =
   ## When a path (or its root) is mutated, every fact about a longer path that
   ## shares this prefix (e.g. `a.next` when `a` is reassigned) is stale.
-  let data = renderPath(prefix).split(".")
+  let data = renderPath(prefix).split(PATH_SEPARATOR)
   for id in ctx.variables.iterateSuffix(data):
     ctx.variables.nodes[id].data.state.kind = Moved
     ctx.variables.nodes[id].data.state.pos = n
@@ -184,7 +205,7 @@ proc movePathsWithPrefix(ctx: var ScopeNode; prefix: SymPath, n: NifCursor) =
 proc relivePathsWithPrefix(ctx: var ScopeNode; prefix: SymPath, n: NifCursor) =
   ## When a path (or its root) is mutated, every fact about a longer path that
   ## shares this prefix (e.g. `a.next` when `a` is reassigned) is stale.
-  let data = renderPath(prefix).split(".")
+  let data = renderPath(prefix).split(PATH_SEPARATOR)
   for id in ctx.variables.iterateSuffix(data):
     ctx.variables.nodes[id].data.state.kind = Alive
 
@@ -192,7 +213,7 @@ proc isAnyDescendantMoved(ctx: ScopeNode, path: SymPath): bool =
   ## Check if any var with prefix `path` has been moved.
   ## This is to check if an object can be moved even if it's currently alive
   ## Because it's a partial object
-  let data = renderPath(path).split(".")
+  let data = renderPath(path).split(PATH_SEPARATOR)
   for id in ctx.variables.iterateSuffix(data):
     if ctx.variables.nodes[id].data.state.kind == Moved:
       return true
@@ -208,7 +229,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     var ownerId = ctx.getOwnerScope(ctx.scopes[node], strPath)
     template ownerScope(): ScopeNode =
       ctx.scopes[ownerId]
-    var strSPath = strPath.split(".")
+    var strSPath = strPath.split(PATH_SEPARATOR)
     let id = ownerScope().variables.fetchNode(strSPath)
     let vk = ownerScope().variables.nodes[id].data.kind
     let l = ownerScope().variables.nodes[id].data.liveness
