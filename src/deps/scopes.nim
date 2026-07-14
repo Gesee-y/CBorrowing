@@ -116,19 +116,13 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
   var recurse = true
   var newS = false
 
-  echo "kind = ", n.kind
-
   if n.kind != TagLit or n.exprKind in {DotX, DdotX, HderefX}:
     let path = ctx.scopes[current].extractPath(n)
     if path.valid and path.path.len > 0:
       let root = path.path[0].symText
       let strPath = renderPath(path)
-      echo strPath
-      echo current
-      echo ctx.scopes.len
 
       let scopeId = ctx.getOwnerScope(ctx.scopes[current], root)
-      echo scopeId
       if scopeId == -1: return
       var ownerScope = addr ctx.scopes[scopeId]
 
@@ -154,16 +148,13 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
     return
 
   n.loopInto:
-    echo "stmtKind = ", n.stmtKind
     case n.stmtKind
     of VarS, LetS:
       let symNode = firstChild(n)
       let kind = if n.stmtKind == VarS: VarK else: LetK
       if symNode.kind == SymbolDef:
         var typ = symNode
-        echo "in"
         var name = symNode.symText
-        echo name
         skip typ
         skip typ
         skip typ
@@ -225,8 +216,11 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
   let info = n.info
   if path.valid and path.path.len > 0:
     let sym = path.path[0]
+
     let strPath = renderPath(path)
     var ownerId = ctx.getOwnerScope(ctx.scopes[node], strPath)
+    if ownerId == -1: return
+
     template ownerScope(): ScopeNode =
       ctx.scopes[ownerId]
     var strSPath = strPath.split(PATH_SEPARATOR)
@@ -261,11 +255,12 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
       movePathsWithPrefix ownerScope(), path, n
 
-proc checkMoves(ctx: var BCContext, id: int, r: var Replacer; isAssign = NoAsgn, isLet=false) =
-  var current = 0
+proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
+  isAssign = NoAsgn, isLet=false) =
   template scope: ScopeNode =
     ctx.scopes[id]
   var newScope = false
+
   if r.isAtom:
     let n = r.getCursor
     if n.kind == Symbol:
@@ -279,16 +274,17 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer; isAssign = NoAsgn,
         var n = r.getCursor()
         let info = n.info
         let path = extractPath(scope(), r.getCursor)
-        checkPath(ctx, id, r, path, isAssign=isAssign, isLet=isLet)
+        checkPath(ctx, id, r, path,
+          isAssign=isAssign, isLet=isLet)
       else:
         discard
     case r.stmtKind
     of StmtsS, BlockS:
       newScope = true
       loopKeepTag r:
-        checkMoves(ctx, scope().children[current], r)
+        checkMoves(ctx, scope().children[scope().stackCount], r)
 
-      current += 1
+      scope().stackCount += 1
     of AsgnS:
       loopKeepTag r:
         checkMoves(ctx, id, r, isAssign = LHSAsgn)
@@ -302,8 +298,11 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer; isAssign = NoAsgn,
       var cnt = 0
       let isLet = r.stmtKind == LetS
       loopKeepTag r:
-        checkMoves(ctx, id, r, isAssign = if cnt > 0: RHSAsgn else: NoAsgn, isLet=isLet)
+        checkMoves(ctx, id, r,
+          isAssign = if cnt > 0: RHSAsgn else: NoAsgn, isLet=isLet)
         cnt += 1
+    of TypeS:
+      keep r, Any
     else:
       loopKeepTag r:
         checkMoves(ctx, id, r)

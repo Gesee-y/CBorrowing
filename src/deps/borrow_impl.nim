@@ -65,19 +65,7 @@ var scanVar = r.getCursor
 collectTypeDecls(ctx.cache, scanTy)
 collectVarData(ctx, 0, scanVar)
 
-for k,v in ctx.cache.nameToId:
-  echo "Type " & k & " maps to " & $v
-  let inst = ctx.cache.instances[v]
-
-  echo "kind = ", inst.kind
-  echo "associated = ", inst.associated
-  echo "fields: "
-  for f in inst.fields:
-    echo "  ", f.name, ": ", f.ty
-
-#loopKeepTag r:
-#  checkMoves(r, ctx.scope)
 loopKeepTag r:
-  keep r, Any
+  checkMoves(ctx, 0, r)
 
 saveReplacer(r)
