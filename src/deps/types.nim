@@ -31,6 +31,7 @@ type
   # It's obtained from a type declaration
   TypeInst* = object
     name: string
+    associated: string
     kind: TypeKind
     raw: NifCursor
     nameToId: Table[string, int]
@@ -45,6 +46,43 @@ type
 # ############################################### FUNCTIONS ################################################ #
 # ########################################################################################################## #
 
+proc newTypeCache(): TypeCache =
+  result = TypeCache()
+  result.nameToId["int"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int")
+  result.nameToId["int8"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int8")
+  result.nameToId["int16"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int16")
+  result.nameToId["int32"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int32")
+  result.nameToId["int64"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int64")
+
+  result.nameToId["uint"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint")
+  result.nameToId["uint8"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint8")
+  result.nameToId["uint16"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint16")
+  result.nameToId["uint32"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint32")
+  result.nameToId["uint64"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint64")
+
+  result.nameToId["float"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "float")
+  result.nameToId["float32"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "float32")
+  result.nameToId["float64"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "float64")
+
+  result.nameToId["bool"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "bool")
+
+  result.nameToId["char"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "char")
+
 proc stripTypeWrappers*(t: NifCursor): NifCursor =
   result = t
   while result.typeKind in {SinkT, MutT, LentT, OutT}:
@@ -53,7 +91,7 @@ proc stripTypeWrappers*(t: NifCursor): NifCursor =
 proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]) =
   var n = t
   while n.typeKind in {SinkT, MutT, LentT, OutT}:
-    case var n.typeKind:
+    case n.typeKind:
     of SinkT:
       flags.incl SinkF
     of MutT:
@@ -63,7 +101,7 @@ proc recordTypeWrappers*(t: NifCursor, flags: var set[TypeFlag]) =
     of OutT:
       flags.incl OutF
     else: discard
-    inc var n
+    inc n
 
 proc getRawTypeKind*(t: NifCursor): TypeKind =
   var n = stripTypeWrappers(t)
@@ -82,6 +120,27 @@ proc getRawTypeKind*(t: NifCursor): TypeKind =
     result = UnknownType
   else:
     result = ObjectType
+
+proc getTypeName(ty: NifCursor): string =
+  result = ""
+  var n = stripTypeWrappers(ty)
+
+  let k = n.typeKind
+  case k:
+  of IT:
+    result = "int" & $(n.firstChild.intValue)
+  of RefT:
+    # For field who uses ref types
+    # We need to infer the ref type name from the object one
+    # They are ina the form `typeName.Obj.version.otherStuff`
+    # We just need to remove the `Obj`
+    inc n
+    var txt = n.symText.split(".")
+    result = txt[0]
+    for i in 2..txt.high:
+      result = result & "." & txt[i]
+  else:
+    result = n.symText
 
 proc isRefType*(n: NifCursor): bool =
   n.getRawTypeKind == RefType
@@ -113,11 +172,10 @@ proc addField(t: var TypeInst, field: TypeField) =
 
 proc declaredTypeBody(n: NifCursor): NifCursor =
   result = n
-  if result.kind == TagLit:
-    inc result
-    skip result # export marker
-    skip result # pragmas
-    skip result # typevars/body prefix
+  skip result # export marker
+  skip result # pragmas
+  skip result # typevars/body prefix
+  skip result
 
 proc addTypeInstance*(tyDef: NifCursor): TypeInst =
   result = TypeInst()
@@ -126,13 +184,19 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
   let symNode = firstChild(tyDef) # Definition of the type
   if symNode.kind == SymbolDef:
     let name = symNode.symText # Text is preferred to symID as it allows more control
-    let body = declaredTypeBody(tyDef)
+    var node = symNode
+    skip node
+    skip node
+    skip node
+    skip node
+    let body = declaredTypeBody(symNode)
     let tyKind = getRawTypeKind(body) # We get the raw body kind from the type
 
     result.name = name
     result.kind = tyKind
 
-    if body.kind == TagLit and tyKind in {ObjectType, RefType}:
+    case tyKind
+    of ObjectType:
       var fieldCursor = firstChild(body)
       skip fieldCursor # parent type / inheritance slot, skip for now
       while fieldCursor.hasMore:
@@ -143,14 +207,19 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
           let fieldSym = field.symId
           skip field # export marker
           skip field # pragmas
+          skip field
           let fieldType = field
-          let fieldTyName = fieldType.symText
+          let fieldTyName = fieldType.getTypeName
 
           f.ty = fieldTyName
           f.raw = fieldType
           f.name = fieldName
           result.addField f
         skip fieldCursor
+    of RefType:
+      let associated = body.firstChild.getTypeName
+      result.associated = associated
+    else: discard
 
 # Directly get informations about procs
 proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
@@ -158,7 +227,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
   result.raw = pDef
   result.kind = ProcType
 
-  let symNode = firstChild(pDef) # Definition of the proc
+  var symNode = firstChild(pDef) # Definition of the proc
   if symNode.kind == SymbolDef:
     let name = symNode.symText
 
@@ -168,13 +237,14 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
     skip symNode
     skip symNode
     skip symNode
+    skip symNode
 
     let body = symNode
     if body.otherKind == ParamsU:
       var fieldCursor = firstChild(body)
 
       while fieldCursor.hasMore:
-        if fieldCursor.symKind == ParamY:
+        if fieldCursor.exprKind != DotX:
           var f = TypeField()
           var field = firstChild(fieldCursor)
           let fieldName = field.symText
@@ -214,47 +284,60 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
 # ############################################### Query API ############################################## #
 # ######################################################################################################## #
 
-proc getType*(c: TypeCache, root: TypeInst, additional: seq[string] = @[]): TypeInst =
+proc getType*(c: TypeCache, root: TypeInst, additional: seq[string]): TypeInst =
   # Fetch the concrete type following a given path
   var inst = root
 
   for f in additional:
+    if inst.associated != "":
+      let id = c.nameToId.getOrDefault(inst.associated, -1)
+      inst = c.instances[id]
     let fid = inst.nameToId.getOrDefault(f, -1)
     if fid == -1: return TypeInst(kind: UnknownType)
     let field = inst.fields[fid]
 
-    ty = c.nameToId.getOrDefault(field.ty, -1)
+    var ty = c.nameToId.getOrDefault(field.ty, -1)
     if ty == -1: return TypeInst(kind: UnknownType)
     inst = c.instances[ty]
 
   return inst
 
-proc getType*(c: TypeCache, root: TypeInst, idx: int = 0): TypeInst =
+proc getType*(c: TypeCache, root: TypeInst, idx: int): TypeInst =
   # Fetch the concrete type following a given position
   # Useful for function the `idx`-th parameter
   var inst = root
+  if inst.associated != "":
+    let id = c.nameToId.getOrDefault(inst.associated, -1)
+    inst = c.instances[id]
   if idx < inst.fields.len:
     let field = inst.fields[idx]
 
-    ty = c.nameToId.getOrDefault(field.ty, -1)
+    var ty = c.nameToId.getOrDefault(field.ty, -1)
     if ty == -1: return TypeInst(kind: UnknownType)
     inst = c.instances[ty]
 
   return inst
 
-proc getType*(c: TypeCache, root: string, additional: seq[string] = @[]): TypeInst =
+proc getType*(c: TypeCache, root: string): TypeInst =
+  # Fetch the concrete type following a given path
+  var ty = c.nameToId.getOrDefault(root, -1)
+  if ty == -1: return TypeInst(kind: UnknownType)
+
+  return c.instances[ty]
+
+proc getType*(c: TypeCache, root: string, additional: seq[string]): TypeInst =
   # Fetch the concrete type following a given path
   var ty = c.nameToId.getOrDefault(root, -1)
   if ty == -1: return TypeInst(kind: UnknownType)
 
   var inst = c.instances[ty]
-  return inst.getType(additional)
+  return c.getType(inst, additional)
 
-proc getType*(c: TypeCache, root: string, idx: int = 0): TypeInst =
+proc getType*(c: TypeCache, root: string, idx: int): TypeInst =
   # Fetch the concrete type following a given position
   # Useful for function the `idx`-th parameter
   var ty = c.nameToId.getOrDefault(root, -1)
   if ty == -1: return TypeInst(kind: UnknownType)
 
   var inst = c.instances[ty]
-  return inst.getType(idx)
+  return c.getType(inst, idx)
