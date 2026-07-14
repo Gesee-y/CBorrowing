@@ -46,6 +46,43 @@ type
 # ############################################### FUNCTIONS ################################################ #
 # ########################################################################################################## #
 
+proc newTypeCache(): TypeCache =
+  result = TypeCache()
+  result.nameToId["int"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int")
+  result.nameToId["int8"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int8")
+  result.nameToId["int16"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int16")
+  result.nameToId["int32"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int32")
+  result.nameToId["int64"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "int64")
+
+  result.nameToId["uint"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint")
+  result.nameToId["uint8"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint8")
+  result.nameToId["uint16"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint16")
+  result.nameToId["uint32"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint32")
+  result.nameToId["uint64"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "uint64")
+
+  result.nameToId["float"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "float")
+  result.nameToId["float32"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "float32")
+  result.nameToId["float64"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "float64")
+
+  result.nameToId["bool"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "bool")
+
+  result.nameToId["char"] = result.instances.len
+  result.instances.add TypeInst(kind: PrimitiveType, name: "char")
+
 proc stripTypeWrappers*(t: NifCursor): NifCursor =
   result = t
   while result.typeKind in {SinkT, MutT, LentT, OutT}:
@@ -85,12 +122,23 @@ proc getRawTypeKind*(t: NifCursor): TypeKind =
     result = ObjectType
 
 proc getTypeName(ty: NifCursor): string =
+  result = ""
   var n = stripTypeWrappers(ty)
 
   let k = n.typeKind
   case k:
   of IT:
     result = "int" & $(n.firstChild.intValue)
+  of RefT:
+    # For field who uses ref types
+    # We need to infer the ref type name from the object one
+    # They are ina the form `typeName.Obj.version.otherStuff`
+    # We just need to remove the `Obj`
+    inc n
+    var txt = n.symText.split(".")
+    result = txt[0]
+    for i in 2..txt.high:
+      result = result & "." & txt[i]
   else:
     result = n.symText
 

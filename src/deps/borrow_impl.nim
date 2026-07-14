@@ -58,10 +58,12 @@ proc errorInstance(msg: string; at, orig: NifCursor): ErrorInstance =
 include "types.nim"
 include "scopes.nim"
 
-var ctx = BCContext(scopes: @[ScopeNode(parent: -1, id: 0, variables: newTrie())])
+var ctx = BCContext(cache: newTypeCache(),
+  scopes: @[ScopeNode(parent: -1, id: 0, variables: newTrie())])
 var r = loadReplacer()
 var scanTy = r.getCursor
 var scanVar = r.getCursor
+
 collectTypeDecls(ctx.cache, scanTy)
 collectVarData(ctx, 0, scanVar)
 

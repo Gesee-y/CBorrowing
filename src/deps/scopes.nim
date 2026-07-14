@@ -158,7 +158,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
         skip typ
         skip typ
         skip typ
-        let inst = ctx.cache.getType(firstChild(typ).getTypeName)
+        let inst = ctx.cache.getType(typ.getTypeName)
         let v = Variable(kind: kind, ty: inst, name: symNode.symText, liveness: Liveness(birth: n))
         let id = ctx.scopes[current].variables.addNode(name)
         ctx.scopes[current].variables.nodes[id].data = v
@@ -216,6 +216,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
   let info = n.info
   if path.valid and path.path.len > 0:
     let sym = path.path[0]
+    let rootStr = path.path[0].symText
 
     let strPath = renderPath(path)
     var ownerId = ctx.getOwnerScope(ctx.scopes[node], strPath)
@@ -225,8 +226,11 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       ctx.scopes[ownerId]
     var strSPath = strPath.split(PATH_SEPARATOR)
     let id = ownerScope().variables.fetchNode(strSPath)
-    let vk = ownerScope().variables.nodes[id].data.kind
-    let l = ownerScope().variables.nodes[id].data.liveness
+    let rid = ownerScope().variables.fetchNode(rootStr)
+
+    # We are only interested in the kind and lifetime of the root
+    let vk = ownerScope().variables.nodes[rid].data.kind
+    let l = ownerScope().variables.nodes[rid].data.liveness
     let varType = ownerScope().variables.nodes[id].data.ty
 
     if isAssign == LHSAsgn and l.birth.info != info:
@@ -238,10 +242,9 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
         # Then it revive it
         ownerScope().variables.nodes[id].data.state = BorrowState(kind: Alive)
         relivePathsWithPrefix ownerScope(), path, n
-
     # If we are assigning, we are on the RHS which has been declared as let
     # And try to assign it to a var variable while the data we are trying to assign is not a ref
-    elif isAssign == RHSAsgn and vk == LetK and not isLet and varType.kind notin {ObjectType, PrimitiveType}:
+    elif isAssign == RHSAsgn and vk == LetK and varType.kind notin {ObjectType, PrimitiveType}:
       ctx.errorStack.add errorInstance("Can't assign an immutable let variable to a var.", n, n)
 
     # Here we check is anything on the path to the variable is already moved
@@ -276,6 +279,9 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
         let path = extractPath(scope(), r.getCursor)
         checkPath(ctx, id, r, path,
           isAssign=isAssign, isLet=isLet)
+
+        keep r, Any
+        return
       else:
         discard
     case r.stmtKind
