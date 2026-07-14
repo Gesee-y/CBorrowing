@@ -31,6 +31,7 @@ type
   # It's obtained from a type declaration
   TypeInst* = object
     name: string
+    associated: string
     kind: TypeKind
     raw: NifCursor
     nameToId: Table[string, int]
@@ -83,6 +84,16 @@ proc getRawTypeKind*(t: NifCursor): TypeKind =
   else:
     result = ObjectType
 
+proc getTypeName(ty: NifCursor): string =
+  var n = stripTypeWrappers(ty)
+
+  let k = n.typeKind
+  case k:
+  of IT:
+    result = "int" & $(n.firstChild.intValue)
+  else:
+    result = n.symText
+
 proc isRefType*(n: NifCursor): bool =
   n.getRawTypeKind == RefType
 
@@ -113,11 +124,10 @@ proc addField(t: var TypeInst, field: TypeField) =
 
 proc declaredTypeBody(n: NifCursor): NifCursor =
   result = n
-  if result.kind == TagLit:
-    inc result
-    skip result # export marker
-    skip result # pragmas
-    skip result # typevars/body prefix
+  skip result # export marker
+  skip result # pragmas
+  skip result # typevars/body prefix
+  skip result
 
 proc addTypeInstance*(tyDef: NifCursor): TypeInst =
   result = TypeInst()
@@ -126,13 +136,19 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
   let symNode = firstChild(tyDef) # Definition of the type
   if symNode.kind == SymbolDef:
     let name = symNode.symText # Text is preferred to symID as it allows more control
-    let body = declaredTypeBody(tyDef)
+    var node = symNode
+    skip node
+    skip node
+    skip node
+    skip node
+    let body = declaredTypeBody(symNode)
     let tyKind = getRawTypeKind(body) # We get the raw body kind from the type
 
     result.name = name
     result.kind = tyKind
 
-    if body.kind == TagLit and tyKind in {ObjectType, RefType}:
+    case tyKind
+    of ObjectType:
       var fieldCursor = firstChild(body)
       skip fieldCursor # parent type / inheritance slot, skip for now
       while fieldCursor.hasMore:
@@ -143,14 +159,19 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
           let fieldSym = field.symId
           skip field # export marker
           skip field # pragmas
+          skip field
           let fieldType = field
-          let fieldTyName = fieldType.symText
+          let fieldTyName = fieldType.getTypeName
 
           f.ty = fieldTyName
           f.raw = fieldType
           f.name = fieldName
           result.addField f
         skip fieldCursor
+    of RefType:
+      let associated = body.firstChild.getTypeName
+      result.associated = associated
+    else: discard
 
 # Directly get informations about procs
 proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
@@ -165,6 +186,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
     result.name = name
 
     # Skip directly to parameters
+    skip symNode
     skip symNode
     skip symNode
     skip symNode
@@ -219,6 +241,9 @@ proc getType*(c: TypeCache, root: TypeInst, additional: seq[string]): TypeInst =
   var inst = root
 
   for f in additional:
+    if inst.associated != "":
+      let id = c.nameToId.getOrDefault(inst.associated, -1)
+      inst = c.instances[id]
     let fid = inst.nameToId.getOrDefault(f, -1)
     if fid == -1: return TypeInst(kind: UnknownType)
     let field = inst.fields[fid]
@@ -233,6 +258,9 @@ proc getType*(c: TypeCache, root: TypeInst, idx: int): TypeInst =
   # Fetch the concrete type following a given position
   # Useful for function the `idx`-th parameter
   var inst = root
+  if inst.associated != "":
+    let id = c.nameToId.getOrDefault(inst.associated, -1)
+    inst = c.instances[id]
   if idx < inst.fields.len:
     let field = inst.fields[idx]
 

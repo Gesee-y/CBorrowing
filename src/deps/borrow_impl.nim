@@ -1,6 +1,5 @@
 import std/[tables, syncio, hashes]
 import plugins
-import graph
 
 type
   SymPath = object
@@ -64,9 +63,24 @@ type
 
 var ctx = BCContext()
 var r = loadReplacer()
-var scan = r.getCursor
-collectTypeDecls(ctx.cache, scan)
-collectVarData(ctx.scope, scan, ctx.cache)
+var scanTy = r.getCursor
+var scanVar = r.getCursor
+collectTypeDecls(ctx.cache, scanTy)
+#collectVarData(ctx.scope, scanVar, ctx.cache)
+
+for k,v in ctx.cache.nameToId:
+  echo "Type " & k & " maps to " & $v
+  let inst = ctx.cache.instances[v]
+
+  echo "kind = ", inst.kind
+  echo "associated = ", inst.associated
+  echo "fields: "
+  for f in inst.fields:
+    echo "  ", f.name, ": ", f.ty
+
+#loopKeepTag r:
+#  checkMoves(r, ctx.scope)
 loopKeepTag r:
-  checkMoves(r, ctx.scope)
+  keep r, Any
+
 saveReplacer(r)
