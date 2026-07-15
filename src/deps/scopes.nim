@@ -178,6 +178,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
     recurse = true
 
     if newS:
+      newS = false
       let parent = ctx.scopes[current].parent
       if parent != -1:
         current = parent
@@ -216,12 +217,14 @@ proc cleanVarAlias(ctx: var BCContext, scope: var ScopeNode, id: int, current: L
     scope.variables.nodes[id].data.aliases.excl i
 
 proc isAnyAliasedWithPrefix(ctx: var BCContext, scope: var ScopeNode; prefix: SymPath, n: NifCursor): bool =
-  let data = renderPath(prefix).split(PATH_SEPARATOR)
+  let str = renderPath(prefix)
+  let data = str.split(PATH_SEPARATOR)
   var current = 0
   for d in data:
     current = scope.variables.nodes[current].children.getOrDefault(d)
     cleanVarAlias(ctx, scope, current, n.info)
-    if scope.variables.nodes[current].data.aliases.len > 0: return true
+    if scope.variables.nodes[current].data.aliases.len > 0:
+      return true
 
   return false
 
@@ -298,8 +301,8 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       ctx.errorStack.add errorInstance("Used after move here", r.getCursor, state.pos)
       return
 
-    # If the variable is used
-    if isAnyAliasedWithPrefix(ctx, ownerScope(), path, n):
+    # If the variable is used for other things than making aliases while it has active aliases.
+    if isAnyAliasedWithPrefix(ctx, ownerScope(), path, n) and not (isAssign == RHSAsgn and ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK):
       ctx.errorStack.add errorInstance("Used while there are still immutable borrows alive", r.getCursor, state.pos)
       return
 
@@ -332,6 +335,7 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
         var n = r.getCursor()
         let info = n.info
         let path = extractPath(scope(), r.getCursor)
+
         checkPath(ctx, id, r, path,
           isAssign=isAssign, isLet=isLet)
 
