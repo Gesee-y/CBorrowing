@@ -1,4 +1,4 @@
-import std/strutils
+import std/strutils, std/sets
 
 type
   Liveness = object
@@ -11,6 +11,7 @@ type
     ty: TypeInst
     liveness: Liveness
     state: BorrowState
+    aliases: HashSet[tuple[scopeId: int, varId: int]]
 
 include "trie.nim"
 
@@ -29,6 +30,7 @@ type
     cache: TypeCache
     scopes: seq[ScopeNode]
     errorStack: seq[ErrorInstance]
+    currentLHS: tuple[scopeId: int, varId: int]
 
 # ############################################################################################################ #
 # ############################################### Functions ################################################## #
@@ -185,6 +187,44 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
 # ############################################# Move Checks ############################################### #
 # ######################################################################################################### #
 
+proc cmpLineInfo(l1, l2: LineInfo): int =
+  result = 0
+  if l1.line < l2.line:
+    result = -1
+  elif l1.line > l2.line:
+    result = 1
+  else:
+    if l1.col < l2.col:
+      result = -1
+    elif l1.col > l2.col:
+      result = 1
+
+proc getLastUse(scope: var ScopeNode, id: int): LineInfo =
+  result = scope.variables.nodes[id].data.liveness.uses[^1].info
+  for i in scope.variables.nodes[id].children.values:
+    let last = scope.getLastUse(i)
+    if cmpLineInfo(result, last) < 0:
+      result = last
+
+proc cleanVarAlias(ctx: var BCContext, scope: var ScopeNode, id: int, current: LineInfo) =
+  var toDelete: seq[tuple[scopeId: int, varId: int]] = @[]
+  for data in scope.variables.nodes[id].data.aliases:
+    if cmpLineInfo(ctx.scopes[data.scopeId].getLastUse(data.varId), current) <= 0:
+      toDelete.add data
+
+  for i in toDelete:
+    scope.variables.nodes[id].data.aliases.excl i
+
+proc isAnyAliasedWithPrefix(ctx: var BCContext, scope: var ScopeNode; prefix: SymPath, n: NifCursor): bool =
+  let data = renderPath(prefix).split(PATH_SEPARATOR)
+  var current = 0
+  for d in data:
+    current = scope.variables.nodes[current].children.getOrDefault(d)
+    cleanVarAlias(ctx, scope, current, n.info)
+    if scope.variables.nodes[current].data.aliases.len > 0: return true
+
+  return false
+
 proc movePathsWithPrefix(ctx: var ScopeNode; prefix: SymPath, n: NifCursor) =
   ## When a path (or its root) is mutated, every fact about a longer path that
   ## shares this prefix (e.g. `a.next` when `a` is reassigned) is stale.
@@ -233,15 +273,19 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     let l = ownerScope().variables.nodes[rid].data.liveness
     let varType = ownerScope().variables.nodes[id].data.ty
 
-    if isAssign == LHSAsgn and l.birth.info != info:
-      if vk == LetK:
-        ctx.errorStack.add errorInstance("Can't modifiy an immutable let variable", n, n)
-      else:
-        # Fix TRevive
-        # If it's an assignment and the LHS receive a new value but is not LetK
-        # Then it revive it
-        ownerScope().variables.nodes[id].data.state = BorrowState(kind: Alive)
-        relivePathsWithPrefix ownerScope(), path, n
+    if isAssign == LHSAsgn:
+      ctx.currentLHS = (ownerId, id)
+      if l.birth.info != info:
+        if vk == LetK:
+          ctx.errorStack.add errorInstance("Can't modifiy an immutable let variable", n, n)
+        else:
+          # Fix TRevive
+          # If it's an assignment and the LHS receive a new value but is not LetK
+          # Then it revive it
+          ownerScope().variables.nodes[id].data.state = BorrowState(kind: Alive)
+          relivePathsWithPrefix ownerScope(), path, n
+
+      return
     # If we are assigning, we are on the RHS which has been declared as let
     # And try to assign it to a var variable while the data we are trying to assign is not a ref
     elif isAssign == RHSAsgn and vk == LetK and varType.kind notin {ObjectType, PrimitiveType}:
@@ -254,9 +298,20 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       ctx.errorStack.add errorInstance("Used after move here", r.getCursor, state.pos)
       return
 
+    # If the variable is used
+    if isAnyAliasedWithPrefix(ctx, ownerScope(), path, n):
+      ctx.errorStack.add errorInstance("Used while there are still immutable borrows alive", r.getCursor, state.pos)
+      return
+
     if isAssign == RHSAsgn:
-      ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
-      movePathsWithPrefix ownerScope(), path, n
+      # For aliasing
+      # If we are assigning to a LetK then we alias
+      # If it's a var then we move
+      if ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK:
+        ownerScope().variables.nodes[id].data.aliases.incl ctx.currentLHS
+      else:
+        ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
+        movePathsWithPrefix ownerScope(), path, n
 
 proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
   isAssign = NoAsgn, isLet=false) =
@@ -266,7 +321,7 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
 
   if r.isAtom:
     let n = r.getCursor
-    if n.kind == Symbol:
+    if n.kind in {Symbol, SymbolDef}:
       let path = extractPath(scope(), n)
       checkPath(ctx, id, r, path, isAssign=isAssign, isLet=isLet)
     keep r, Any
@@ -305,7 +360,8 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
       let isLet = r.stmtKind == LetS
       loopKeepTag r:
         checkMoves(ctx, id, r,
-          isAssign = if cnt > 0: RHSAsgn else: NoAsgn, isLet=isLet)
+          isAssign = if cnt <= 2: LHSAsgn elif cnt > 2: RHSAsgn else: NoAsgn,
+          isLet=isLet)
         cnt += 1
     of TypeS:
       keep r, Any
