@@ -39,6 +39,7 @@ type
     errorStack: seq[ErrorInstance]
     currentLHS: tuple[scopeId: int, varId: int]
     currentCond: int
+    shouldStop: bool
 
 # ############################################################################################################ #
 # ############################################### Functions ################################################## #
@@ -174,6 +175,8 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
         ctx.scopes[current].variables.nodes[id].data = v
 
       collectVarData(ctx, current, n)
+    of CommentS:
+      return
     of IfS, CaseS:
       ctx.currentCond += 1
       collectVarData(ctx, current, n)
@@ -376,6 +379,9 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
   template scope: ScopeNode =
     ctx.scopes[id]
   var newScope = false
+  if ctx.shouldStop:
+    keep r, Any
+    return
 
   if r.isAtom:
     let n = r.getCursor
@@ -411,9 +417,13 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
         checkMoves(ctx, id, r, isAssign = RHSAsgn)
     of CommentS:
       var stmt = createTree()
+      var c = getCursor(r)
+      stmt.takeTree c
       for err in ctx.errorStack:
         stmt.addTree errorTree(err.msg, err.at, err.orig)
       replace r, Any, stmt
+      ctx.shouldStop = true
+      return
     of VarS, LetS:
       var cnt = 0
       let isLet = r.stmtKind == LetS

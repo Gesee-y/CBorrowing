@@ -141,6 +141,8 @@ proc getTypeName(ty: NifCursor): string =
     result = txt[0]
     for i in 2..txt.high:
       result = result & "." & txt[i]
+  of NoType:
+    result = ""
   else:
     if n.kind == TagLit: inc n
     result = n.symText
@@ -192,6 +194,7 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
     skip node
     skip node
     skip node
+
     let body = declaredTypeBody(symNode)
     let tyKind = getRawTypeKind(body) # We get the raw body kind from the type
 
@@ -278,6 +281,8 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
       let pDef = n
       let instance = addProcTypeInstance(pDef)
       c.addInstance(instance)
+    of CommentS:
+      return
     else:
       discard
     collectTypeDecls(c, n)
