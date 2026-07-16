@@ -64,11 +64,8 @@ var r = loadReplacer()
 var scanTy = r.getCursor
 var scanVar = r.getCursor
 
-echo "in"
 collectTypeDecls(ctx.cache, scanTy)
-echo "in"
 collectVarData(ctx, 0, scanVar)
-echo "in"
 loopKeepTag r:
   checkMoves(ctx, 0, r)
 
