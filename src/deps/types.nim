@@ -129,6 +129,8 @@ proc getTypeName(ty: NifCursor): string =
   case k:
   of IT:
     result = "int" & $(n.firstChild.intValue)
+  of BoolT:
+    result = $k
   of RefT:
     # For field who uses ref types
     # We need to infer the ref type name from the object one
@@ -140,6 +142,7 @@ proc getTypeName(ty: NifCursor): string =
     for i in 2..txt.high:
       result = result & "." & txt[i]
   else:
+    if n.kind == TagLit: inc n
     result = n.symText
 
 proc isRefType*(n: NifCursor): bool =

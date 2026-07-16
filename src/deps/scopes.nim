@@ -11,13 +11,21 @@ type
     ty: TypeInst
     liveness: Liveness
     state: BorrowState
+    maybeState: set[uint16]
     aliases: HashSet[tuple[scopeId: int, varId: int]]
 
 include "trie.nim"
 
 type
+  ScopeKind = enum
+    SimpleScope
+    CondScope
+    LoopScope
+
   ScopeNode = object
+    kind: ScopeKind
     id: int
+    subId: int
     variables: Trie
     children: seq[int]
     moveState: Table[SymPath, BorrowState]
@@ -31,6 +39,7 @@ type
     scopes: seq[ScopeNode]
     errorStack: seq[ErrorInstance]
     currentLHS: tuple[scopeId: int, varId: int]
+    currentCond: int
 
 # ############################################################################################################ #
 # ############################################### Functions ################################################## #
@@ -96,7 +105,6 @@ proc extractPath(c: var ScopeNode; n: NifCursor; res: var SymPath; followInlineV
     else:
       res.valid = false
   of Symbol, SymbolDef:
-    let s = n.symId
     addPathSegment(res, n)
   of IntLit, UIntLit, CharLit, FloatLit, StrLit, DotToken:
     res.valid = false
@@ -112,12 +120,13 @@ proc extractPath(c: var ScopeNode; n: NifCursor; followInlineVars = true): SymPa
 proc rootPath(sym: SymId): SymPath =
   result = SymPath(valid: true, path: @[sym])
 
-proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
+proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool = false) =
   var n = root
   var current = nid
-  var recurse = true
+  var currentCond = ctx.currentCond
   var newS = false
 
+  if n.kind in {IntLit, CharLit}: return
   if n.kind != TagLit or n.exprKind in {DotX, DdotX, HderefX}:
     let path = ctx.scopes[current].extractPath(n)
     if path.valid and path.path.len > 0:
@@ -142,7 +151,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
           liveness: Liveness(birth: n))
         v.liveness.uses.add(n)
 
-        id = ownerScope.variables.addNode(strPath.split("::"))
+        id = ownerScope.variables.addNode(strPath.split(PATH_SEPARATOR))
         ownerScope.variables.nodes[id].data = v
 
       ownerScope.variables.nodes[id].data.state = BorrowState(kind: Alive)
@@ -164,24 +173,39 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor) =
         let v = Variable(kind: kind, ty: inst, name: symNode.symText, liveness: Liveness(birth: n))
         let id = ctx.scopes[current].variables.addNode(name)
         ctx.scopes[current].variables.nodes[id].data = v
+
+      collectVarData(ctx, current, n)
+    of IfS:
+      ctx.currentCond += 1
+      collectVarData(ctx, current, n)
     of StmtsS, BlockS:
-      var newNode = ScopeNode(id: ctx.scopes.len, parent: current, variables: newTrie())
+      var kind = SimpleScope
+      var subId = 0
+
+      if isCond:
+        kind = CondScope
+        subId = currentCond
+
+      var newNode = ScopeNode(kind: kind, id: ctx.scopes.len, subId: subId, parent: current, variables: newTrie())
       ctx.scopes[current].children.add(newNode.id)
       ctx.scopes.add(newNode)
       current = newNode.id
       newS = true
-    of TypeS:
-      recurse = false
+      collectVarData(ctx, current, n)
+    of TypeS: discard
     else:
-      discard
-    if recurse: collectVarData(ctx, current, n)
-    recurse = true
+      case n.otherKind:
+      of ElifU, ElseU:
+        collectVarData(ctx, current, n, isCond=true)
+      else:
+        collectVarData(ctx, current, n, isCond=isCond)
 
     if newS:
       newS = false
       let parent = ctx.scopes[current].parent
       if parent != -1:
         current = parent
+
     n.skip()
 
 # ######################################################################################################### #
@@ -221,7 +245,9 @@ proc isAnyAliasedWithPrefix(ctx: var BCContext, scope: var ScopeNode; prefix: Sy
   let data = str.split(PATH_SEPARATOR)
   var current = 0
   for d in data:
-    current = scope.variables.nodes[current].children.getOrDefault(d)
+    let next = scope.variables.nodes[current].children.getOrDefault(d, -1)
+    if next == -1: return false
+    current = next
     cleanVarAlias(ctx, scope, current, n.info)
     if scope.variables.nodes[current].data.aliases.len > 0:
       return true
@@ -235,6 +261,13 @@ proc movePathsWithPrefix(ctx: var ScopeNode; prefix: SymPath, n: NifCursor) =
   for id in ctx.variables.iterateSuffix(data):
     ctx.variables.nodes[id].data.state.kind = Moved
     ctx.variables.nodes[id].data.state.pos = n
+
+proc maybeMovePathsWithPrefix(ctx: var ScopeNode; sid: int, prefix: SymPath, n: NifCursor) =
+  ## When a path (or its root) is mutated in a conditional scope, every fact about a longer path that
+  ## shares this prefix (e.g. `a.next` when `a` is reassigned) is maybe stale.
+  let data = renderPath(prefix).split(PATH_SEPARATOR)
+  for id in ctx.variables.iterateSuffix(data):
+    ctx.variables.nodes[id].data.maybeState.incl sid.uint16
 
 proc relivePathsWithPrefix(ctx: var ScopeNode; prefix: SymPath, n: NifCursor) =
   ## When a path (or its root) is mutated, every fact about a longer path that
@@ -250,6 +283,17 @@ proc isAnyDescendantMoved(ctx: ScopeNode, path: SymPath): bool =
   let data = renderPath(path).split(PATH_SEPARATOR)
   for id in ctx.variables.iterateSuffix(data):
     if ctx.variables.nodes[id].data.state.kind == Moved:
+      return true
+
+  return false
+
+proc isAnyDescendantMaybeMoved(ctx: ScopeNode, path: SymPath): bool =
+  ## Check if any var with prefix `path` has been moved.
+  ## This is to check if an object can be moved even if it's currently alive
+  ## Because it's a partial object
+  let data = renderPath(path).split(PATH_SEPARATOR)
+  for id in ctx.variables.iterateSuffix(data):
+    if ctx.variables.nodes[id].data.maybeState.len > 0:
       return true
 
   return false
@@ -297,13 +341,20 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     # Here we check is anything on the path to the variable is already moved
     # And prevent use after move
     let state = ownerScope().variables.nodes[id].data.state
-    if state.kind == Moved:
+    if (state.kind == Moved or isAnyDescendantMoved(ownerScope(), path)):
       ctx.errorStack.add errorInstance("Used after move here", r.getCursor, state.pos)
       return
 
+    let scope = addr ctx.scopes[node]
+    if scope.kind != CondScope:
+      if ownerScope().variables.nodes[id].data.maybeState.len > 0 or isAnyDescendantMaybeMoved(ownerScope(), path):
+        let err = ownerScope().variables.nodes[id].data.state.pos
+        ctx.errorStack.add errorInstance("Cannot prove the variable has not been moved during conditional statements", r.getCursor, err)
+        return
+
     # If the variable is used for other things than making aliases while it has active aliases.
     if isAnyAliasedWithPrefix(ctx, ownerScope(), path, n) and not (isAssign == RHSAsgn and ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK):
-      ctx.errorStack.add errorInstance("Used while there are still immutable borrows alive", r.getCursor, state.pos)
+      ctx.errorStack.add errorInstance("Used while there are still immutable borrows alive", r.getCursor, r.getCursor)
       return
 
     if isAssign == RHSAsgn:
@@ -313,8 +364,13 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       if ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK:
         ownerScope().variables.nodes[id].data.aliases.incl ctx.currentLHS
       else:
-        ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
-        movePathsWithPrefix ownerScope(), path, n
+        if scope.kind == CondScope:
+          ownerScope().variables.nodes[id].data.maybeState.incl node.uint16
+          ownerScope().variables.nodes[id].data.state.pos = n
+          maybeMovePathsWithPrefix ownerScope(), node, path, n
+        else:
+          ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
+          movePathsWithPrefix ownerScope(), path, n
 
 proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
   isAssign = NoAsgn, isLet=false) =
