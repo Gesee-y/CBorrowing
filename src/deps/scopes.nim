@@ -256,6 +256,16 @@ proc isAnyAliasedWithPrefix(ctx: var BCContext, scope: var ScopeNode; prefix: Sy
 
   return false
 
+proc isAnyDescendantAliased(ctx: var BCContext, scope: var ScopeNode; prefix: SymPath, n: NifCursor): bool =
+  let str = renderPath(prefix)
+  let data = str.split(PATH_SEPARATOR)
+  for id in scope.variables.iterateSuffix(data):
+    cleanVarAlias(ctx, scope, id, n.info)
+    if scope.variables.nodes[id].data.aliases.len > 0:
+      return true
+
+  return false
+
 proc movePathsWithPrefix(ctx: var ScopeNode; prefix: SymPath, n: NifCursor) =
   ## When a path (or its root) is mutated, every fact about a longer path that
   ## shares this prefix (e.g. `a.next` when `a` is reassigned) is stale.
@@ -355,7 +365,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
         return
 
     # If the variable is used for other things than making aliases while it has active aliases.
-    if isAnyAliasedWithPrefix(ctx, ownerScope(), path, n) and not (isAssign == RHSAsgn and ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK):
+    if (isAnyAliasedWithPrefix(ctx, ownerScope(), path, n) or isAnyDescendantAliased(ctx, ownerScope(), path, n)) and not (isAssign == RHSAsgn and ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK):
       ctx.errorStack.add errorInstance("Used while there are still immutable borrows alive", r.getCursor, r.getCursor)
       return
 
