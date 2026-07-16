@@ -20,7 +20,6 @@ type
   ScopeKind = enum
     SimpleScope
     CondScope
-    LoopScope
 
   ScopeNode = object
     kind: ScopeKind
@@ -175,7 +174,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
         ctx.scopes[current].variables.nodes[id].data = v
 
       collectVarData(ctx, current, n)
-    of IfS:
+    of IfS, CaseS:
       ctx.currentCond += 1
       collectVarData(ctx, current, n)
     of StmtsS, BlockS:
@@ -195,7 +194,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
     of TypeS: discard
     else:
       case n.otherKind:
-      of ElifU, ElseU:
+      of ElifU, ElseU, OfU:
         collectVarData(ctx, current, n, isCond=true)
       else:
         collectVarData(ctx, current, n, isCond=isCond)
