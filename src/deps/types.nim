@@ -129,6 +129,8 @@ proc getTypeName(ty: NifCursor): string =
   case k:
   of IT:
     result = "int" & $(n.firstChild.intValue)
+  of BoolT:
+    result = $k
   of RefT:
     # For field who uses ref types
     # We need to infer the ref type name from the object one
@@ -139,7 +141,10 @@ proc getTypeName(ty: NifCursor): string =
     result = txt[0]
     for i in 2..txt.high:
       result = result & "." & txt[i]
+  of NoType:
+    result = ""
   else:
+    if n.kind == TagLit: inc n
     result = n.symText
 
 proc isRefType*(n: NifCursor): bool =
@@ -189,6 +194,7 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
     skip node
     skip node
     skip node
+
     let body = declaredTypeBody(symNode)
     let tyKind = getRawTypeKind(body) # We get the raw body kind from the type
 
@@ -275,6 +281,8 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
       let pDef = n
       let instance = addProcTypeInstance(pDef)
       c.addInstance(instance)
+    of CommentS:
+      return
     else:
       discard
     collectTypeDecls(c, n)

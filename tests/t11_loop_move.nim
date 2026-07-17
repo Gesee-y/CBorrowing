@@ -16,7 +16,7 @@ type
 proc main() =
   var p = RefO()
   for i in 0..2:
-    var n = p        # First iteration: OK (move). Subsequent: Error (already Moved).
+    var n = p        # OK (move), ARC take care of everything as we are not inserting destructors
     echo n.x
 
 main()

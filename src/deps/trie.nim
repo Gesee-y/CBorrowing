@@ -48,7 +48,7 @@ proc fetchNode(t: Trie, data: seq[string]): int =
   result = 0
   for d in data:
     result = t.nodes[result].children.getOrDefault(d, -1)
-    if result == -1: return
+    if result == -1: break
 
 proc fetchNode(t: Trie, data: string): int =
   result = t.nodes[0].children.getOrDefault(data, -1)
@@ -66,7 +66,8 @@ iterator iterateSuffix(t: Trie, node: TNode): int {.sideEffect.} =
 
 iterator iterateSuffix(t: Trie, data: seq[string]): int {.sideEffect.} =
   let node = t.fetchNode(data)
-  var stack: seq[int] = @[]
-  t.getAllSuffix(t.nodes[node], stack)
-  for v in stack:
-    yield v
+  if node != -1:
+    var stack: seq[int] = @[]
+    t.getAllSuffix(t.nodes[node], stack)
+    for v in stack:
+      yield v
