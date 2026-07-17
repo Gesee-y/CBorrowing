@@ -236,7 +236,6 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
   var symNode = firstChild(pDef) # Definition of the proc
   if symNode.kind == SymbolDef:
     let name = symNode.symText
-
     result.name = name
 
     # Skip directly to parameters
@@ -255,10 +254,11 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
           var field = firstChild(fieldCursor)
           let fieldName = field.symText
           let fieldSym = field.symId
+          skip field
           skip field # export marker
           skip field # pragmas
           let fieldType = field
-          let fieldTyName = fieldType.symText
+          let fieldTyName = fieldType.getTypeName
           recordTypeWrappers(fieldType, f.subinfo)
 
           f.ty = fieldTyName
