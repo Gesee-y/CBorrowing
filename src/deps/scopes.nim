@@ -40,6 +40,7 @@ type
     currentLHS: tuple[scopeId: int, varId: int]
     currentCond: int
     shouldStop: bool
+    varToAdd: seq[Variable]
 
 # ############################################################################################################ #
 # ############################################### Functions ################################################## #
@@ -160,9 +161,9 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
 
   n.loopInto:
     case n.stmtKind
-    of VarS, LetS:
+    of VarS, LetS, GvarS, GletS, TvarS, TletS:
       let symNode = firstChild(n)
-      let kind = if n.stmtKind == VarS: VarK else: LetK
+      let kind = if n.stmtKind in {VarS, GvarS, TvarS}: VarK else: LetK
       if symNode.kind == SymbolDef:
         var typ = symNode
         var name = symNode.symText
@@ -190,11 +191,32 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
 
       var newNode = ScopeNode(kind: kind, id: ctx.scopes.len, subId: subId, parent: current, variables: newTrie())
       ctx.scopes[current].children.add(newNode.id)
-      ctx.scopes.add(newNode)
       current = newNode.id
+      ctx.scopes.add(newNode)
+
+      while ctx.varToAdd.len > 0:
+        let v = ctx.varToAdd.pop()
+        let id = ctx.scopes[current].variables.addNode(v.name)
+        ctx.scopes[current].variables.nodes[id].data = v
+
       newS = true
       collectVarData(ctx, current, n)
     of TypeS: discard
+    of ProcS, FuncS:
+      var symNode = firstChild(n)
+      if symNode.kind == SymbolDef:
+        let name = symNode.symText
+        let ty = ctx.cache.getType(name)
+
+        for field in ty.fields:
+          var fname = field.name
+          let inst = ctx.cache.getType(field.ty)
+          let kind = if VarF in field.subinfo: VarK else: LetK
+
+          let v = Variable(kind: kind, ty: inst, name: fname, liveness: Liveness(birth: n))
+          ctx.varToAdd.add(v)
+
+      collectVarData(ctx, current, n)
     else:
       case n.otherKind:
       of ElifU, ElseU, OfU:
