@@ -9,5 +9,5 @@ proc disableStrictLets* = discard
 proc disableAliases* = discard
 proc enableAliases* = discard
 
-proc disableMove* = discard
-proc enableMove* = discard
+proc disableMoves* = discard
+proc enableMoves* = discard

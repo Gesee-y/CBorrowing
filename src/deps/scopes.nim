@@ -355,9 +355,26 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     let sym = path.path[0]
     let rootStr = path.path[0].symText
 
+
     let strPath = renderPath(path)
     var ownerId = ctx.getOwnerScope(ctx.scopes[node], strPath)
-    if ownerId == -1: return
+    if ownerId == -1:
+      var fname = rootStr.split(".")[0]
+      var val = false
+      if fname.startsWith("enable"):
+        fname = fname[6..^1]
+        val = true
+      else:
+        fname = fname[7..^1]
+
+      case fname:
+      of "StrictLets":
+        ctx.features.strictLets = val
+      of "Aliases":
+        ctx.features.aliases = val
+      of "Moves":
+        ctx.features.moves = val
+      return
 
     template ownerScope(): ScopeNode =
       ctx.scopes[ownerId]
@@ -373,7 +390,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     if isAssign == LHSAsgn:
       ctx.currentLHS = (ownerId, id)
       if l.birth.info != info:
-        if vk == LetK:
+        if vk == LetK and ctx.features.strictLets:
           ctx.errorStack.add errorInstance("Can't modifiy an immutable let variable", n, n)
         else:
           # Fix TRevive
@@ -385,7 +402,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       return
     # If we are assigning, we are on the RHS which has been declared as let
     # And try to assign it to a var variable while the data we are trying to assign is not a ref
-    elif isAssign == RHSAsgn and vk == LetK and varType.kind notin {ObjectType, PrimitiveType}:
+    elif isAssign == RHSAsgn and vk == LetK and varType.kind notin {ObjectType, PrimitiveType} and ctx.features.strictLets:
       ctx.errorStack.add errorInstance("Can't assign an immutable let variable to a var.", n, n)
       return
 
@@ -422,7 +439,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       # For aliasing
       # If we are assigning to a LetK then we alias
       # If it's a var then we move
-      if ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK:
+      if ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK and ctx.features.aliases:
         ownerScope().variables.nodes[id].data.aliases.incl ctx.currentLHS
       else:
         if scope.kind == CondScope:
@@ -430,7 +447,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
           ownerScope().variables.nodes[id].data.state.pos = n
           maybeMovePathsWithPrefix ownerScope(), node, path, n
         else:
-          if varType.kind in {ObjectType, PrimitiveType}: return
+          if varType.kind in {ObjectType, PrimitiveType} or not ctx.features.moves: return
           ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
           movePathsWithPrefix ownerScope(), path, n
 
