@@ -118,6 +118,16 @@ proc extractPath(c: var ScopeNode; n: NifCursor; followInlineVars = true): SymPa
   if not result.valid or result.path.len == 0:
     result.valid = false
 
+proc pathsOverlap(a, b: SymPath): bool =
+  ## Two paths overlap if one is a prefix of the other (or they are equal).
+  ## Disjoint siblings (e.g. a.b vs a.c) do not overlap.
+  if a.path.len == 0 or b.path.len == 0: return false
+  let minLen = min(a.path.len, b.path.len)
+  for i in 0 ..< minLen:
+    if a.path[i] != b.path[i]:
+      return false
+  result = true
+
 proc rootPath(sym: SymId): SymPath =
   result = SymPath(valid: true, path: @[sym])
 
@@ -354,6 +364,8 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     let l = ownerScope().variables.nodes[rid].data.liveness
     let varType = ownerScope().variables.nodes[id].data.ty
 
+    if varType.kind in {ObjectType, PrimitiveType}: return
+
     if isAssign == LHSAsgn:
       ctx.currentLHS = (ownerId, id)
       if l.birth.info != info:
@@ -390,6 +402,16 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     if (isAnyAliasedWithPrefix(ctx, ownerScope(), path, n) or isAnyDescendantAliased(ctx, ownerScope(), path, n)) and not (isAssign == RHSAsgn and ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data.kind == LetK):
       ctx.errorStack.add errorInstance("Used while there are still immutable borrows alive", r.getCursor, r.getCursor)
       return
+
+    # If it's a RHSAsgn and the current LHS overlap with the RHS, then we should trigger an error
+    # Because it is self-assignment
+    if isAssign == RHSAsgn:
+      let data = ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data
+      if data.name.startsWith(strSPath):
+        ctx.errorStack.add errorInstance("Invalid Self assignment", r.getCursor, r.getCursor)
+        return
+      elif strSPath.startsWith(data.name):
+        return
 
     if isAssign == RHSAsgn:
       # For aliasing

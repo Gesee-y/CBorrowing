@@ -288,6 +288,30 @@ proc collectTypeDecls*(c: var TypeCache, root: NifCursor) =
     collectTypeDecls(c, n)
     n.skip()
 
+proc updateRef(t: var TypeCache, ty: string, visited: var Table[string, bool]): bool =
+  var id = t.nameToId.getOrDefault(ty)
+  if ty in visited:
+    return visited.getOrDefault(ty)
+  if t.instance[id].kind in {PrimitiveType, ProcType}:
+    visited[ty] = false
+    return false
+
+  for field in t.instance[id].fields:
+    if updateRef(t, field.ty, visited):
+      var id = t.nameToId.getOrDefault(ty)
+      t.instances[id].kind = RefType
+      visited[ty] = true
+      return true
+
+  visited[ty] = false
+  return false
+
+proc propagateRefs(t: var TypeCache) =
+  var visited = initTable[string, bool]()
+  for inst in t.nameToId.keys:
+    if inst notin visited:
+      discard updateRef(t, inst, visited)
+
 # ######################################################################################################## #
 # ############################################### Query API ############################################## #
 # ######################################################################################################## #

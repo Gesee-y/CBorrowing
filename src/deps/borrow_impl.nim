@@ -65,6 +65,7 @@ var scanTy = r.getCursor
 var scanVar = r.getCursor
 
 collectTypeDecls(ctx.cache, scanTy)
+propagateRefs(ctx.cache)
 collectVarData(ctx, 0, scanVar)
 loopKeepTag r:
   checkMoves(ctx, 0, r)
