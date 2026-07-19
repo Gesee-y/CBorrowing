@@ -58,7 +58,8 @@ proc errorInstance(msg: string; at, orig: NifCursor): ErrorInstance =
 include "types.nim"
 include "scopes.nim"
 
-var ctx = BCContext(cache: newTypeCache(),
+var defaultFeature = BCFeatures(strictLets: true, aliases: true, moves: true)
+var ctx = BCContext(cache: newTypeCache(), features: defaultFeature,
   scopes: @[ScopeNode(parent: -1, id: 0, variables: newTrie())])
 var r = loadReplacer()
 var scanTy = r.getCursor

@@ -33,8 +33,14 @@ type
     stackCount: int
     errorStack: seq[ErrorInstance]
 
+  BCFeatures = object
+    strictLets: bool
+    aliases: bool
+    moves: bool
+
   BCContext = object
     cache: TypeCache
+    features: BCFeatures
     scopes: seq[ScopeNode]
     errorStack: seq[ErrorInstance]
     currentLHS: tuple[scopeId: int, varId: int]
