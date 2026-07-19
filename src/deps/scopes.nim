@@ -364,8 +364,6 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     let l = ownerScope().variables.nodes[rid].data.liveness
     let varType = ownerScope().variables.nodes[id].data.ty
 
-    if varType.kind in {ObjectType, PrimitiveType}: return
-
     if isAssign == LHSAsgn:
       ctx.currentLHS = (ownerId, id)
       if l.birth.info != info:
@@ -383,6 +381,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     # And try to assign it to a var variable while the data we are trying to assign is not a ref
     elif isAssign == RHSAsgn and vk == LetK and varType.kind notin {ObjectType, PrimitiveType}:
       ctx.errorStack.add errorInstance("Can't assign an immutable let variable to a var.", n, n)
+      return
 
     # Here we check is anything on the path to the variable is already moved
     # And prevent use after move
@@ -407,10 +406,10 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
     # Because it is self-assignment
     if isAssign == RHSAsgn:
       let data = ctx.scopes[ctx.currentLHS.scopeId].variables.nodes[ctx.currentLHS.varId].data
-      if data.name.startsWith(strSPath):
+      if data.name.startsWith(strPath):
         ctx.errorStack.add errorInstance("Invalid Self assignment", r.getCursor, r.getCursor)
         return
-      elif strSPath.startsWith(data.name):
+      elif strPath.startsWith(data.name):
         return
 
     if isAssign == RHSAsgn:
@@ -425,6 +424,7 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
           ownerScope().variables.nodes[id].data.state.pos = n
           maybeMovePathsWithPrefix ownerScope(), node, path, n
         else:
+          if varType.kind in {ObjectType, PrimitiveType}: return
           ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
           movePathsWithPrefix ownerScope(), path, n
 

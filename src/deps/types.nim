@@ -292,11 +292,11 @@ proc updateRef(t: var TypeCache, ty: string, visited: var Table[string, bool]): 
   var id = t.nameToId.getOrDefault(ty)
   if ty in visited:
     return visited.getOrDefault(ty)
-  if t.instance[id].kind in {PrimitiveType, ProcType}:
+  if t.instances[id].kind in {PrimitiveType, ProcType}:
     visited[ty] = false
     return false
 
-  for field in t.instance[id].fields:
+  for field in t.instances[id].fields:
     if updateRef(t, field.ty, visited):
       var id = t.nameToId.getOrDefault(ty)
       t.instances[id].kind = RefType
