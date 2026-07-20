@@ -17,7 +17,7 @@ This offer multiple features like:
 import ../src/borrowing
 import std/syncio
 
-enableBorrowChecker()
+enableBorrowChecker() # This suffice to invoke hell on your code
 
 type
   RefO = ref object
