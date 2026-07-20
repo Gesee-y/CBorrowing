@@ -143,7 +143,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
   var currentCond = ctx.currentCond
   var newS = false
 
-  if n.kind in {IntLit, CharLit}: return
+  if n.kind in {IntLit, CharLit, DotToken}: return
   if n.kind != TagLit or n.exprKind in {DotX, DdotX, HderefX}:
     let path = ctx.scopes[current].extractPath(n)
     if path.valid and path.path.len > 0:
@@ -177,9 +177,9 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
 
   n.loopInto:
     case n.stmtKind
-    of VarS, LetS, GvarS, GletS, TvarS, TletS:
+    of VarS, LetS, TvarS, TletS:
       let symNode = firstChild(n)
-      let kind = if n.stmtKind in {VarS, GvarS, TvarS}: VarK else: LetK
+      let kind = if n.stmtKind in {VarS, TvarS}: VarK else: LetK
       if symNode.kind == SymbolDef:
         var typ = symNode
         var name = symNode.symText
@@ -456,6 +456,7 @@ proc checkMoves(ctx: var BCContext, id: int, r: var Replacer;
   template scope: ScopeNode =
     ctx.scopes[id]
   var newScope = false
+
   if ctx.shouldStop:
     keep r, Any
     return
