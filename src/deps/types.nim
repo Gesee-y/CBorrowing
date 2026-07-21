@@ -137,15 +137,21 @@ proc getTypeName(ty: NifCursor): string =
     # They are ina the form `typeName.Obj.version.otherStuff`
     # We just need to remove the `Obj`
     inc n
-    var txt = n.symText.split(".")
-    result = txt[0]
-    for i in 2..txt.high:
-      result = result & "." & txt[i]
+    if n.kind in {Symbol, SymbolDef}:
+      var txt = n.symText.split(".")
+      result = txt[0]
+      for i in 2..txt.high:
+        result = result & "." & txt[i]
   of NoType:
     result = ""
   else:
     if n.kind == TagLit: inc n
-    result = n.symText
+    if n.kind in {Symbol, SymbolDef}:
+      result = n.symText
+    elif n.kind == TagLit:
+      result = n.tagText
+    else:
+      result = ""
 
 proc isRefType*(n: NifCursor): bool =
   n.getRawTypeKind == RefType
@@ -209,7 +215,7 @@ proc addTypeInstance*(tyDef: NifCursor): TypeInst =
         if fieldCursor.kind == TagLit and fieldCursor.otherKind == FldU:
           var f = TypeField()
           var field = firstChild(fieldCursor)
-          let fieldName = field.symText
+          let fieldName = if field.kind in {Symbol, SymbolDef}: field.symText else: ""
           let fieldSym = field.symId
           skip field # export marker
           skip field # pragmas
@@ -234,7 +240,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
   result.kind = ProcType
 
   var symNode = firstChild(pDef) # Definition of the proc
-  if symNode.kind == SymbolDef:
+  if symNode.kind in {Symbol, SymbolDef}:
     let name = symNode.symText
     result.name = name
 
@@ -252,7 +258,7 @@ proc addProcTypeInstance*(pDef: NifCursor): TypeInst =
         if fieldCursor.exprKind != DotX:
           var f = TypeField()
           var field = firstChild(fieldCursor)
-          let fieldName = field.symText
+          let fieldName = if field.kind in {Symbol, SymbolDef}: field.symText else: ""
           let fieldSym = field.symId
           skip field
           skip field # export marker

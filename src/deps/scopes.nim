@@ -13,6 +13,7 @@ type
     state: BorrowState
     maybeState: set[uint16]
     aliases: HashSet[tuple[scopeId: int, varId: int]]
+    capturedInProc: int
 
 include "trie.nim"
 
@@ -20,6 +21,7 @@ type
   ScopeKind = enum
     SimpleScope
     CondScope
+    ProcScope
 
   ScopeNode = object
     kind: ScopeKind
@@ -51,6 +53,23 @@ type
 # ############################################################################################################ #
 # ############################################### Functions ################################################## #
 # ############################################################################################################ #
+
+proc isDescendantOf(ctx: BCContext, node: int, targetScope: int): bool =
+  if targetScope == -1: return false
+  var curr = node
+  while curr != -1:
+    if curr == targetScope:
+      return true
+    curr = ctx.scopes[curr].parent
+  return false
+
+proc getCapturingProcScope(ctx: BCContext, node: int, ownerId: int): int =
+  var curr = node
+  result = -1
+  while curr != -1 and curr != ownerId:
+    if ctx.scopes[curr].kind == ProcScope:
+      result = curr
+    curr = ctx.scopes[curr].parent
 
 proc getOwnerScope(ctx: BCContext, scope: ScopeNode, path: seq[string]): int =
   result = scope.id
@@ -137,7 +156,7 @@ proc pathsOverlap(a, b: SymPath): bool =
 proc rootPath(sym: SymId): SymPath =
   result = SymPath(valid: true, path: @[sym])
 
-proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool = false) =
+proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool = false, isProc: bool = false) =
   var n = root
   var current = nid
   var currentCond = ctx.currentCond
@@ -165,7 +184,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
       else:
         var v = Variable(name: strPath, kind: ownerScope.variables.nodes[rv].data.kind,
           ty: ctx.cache.getType(ownerScope.variables.nodes[rv].data.ty, strPath.split(PATH_SEPARATOR)[1..^1]),
-          liveness: Liveness(birth: n))
+          liveness: Liveness(birth: n), capturedInProc: -1)
         v.liveness.uses.add(n)
 
         id = ownerScope.variables.addNode(strPath.split(PATH_SEPARATOR))
@@ -187,7 +206,7 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
         skip typ
         skip typ
         let inst = ctx.cache.getType(typ.getTypeName)
-        let v = Variable(kind: kind, ty: inst, name: symNode.symText, liveness: Liveness(birth: n))
+        let v = Variable(kind: kind, ty: inst, name: symNode.symText, liveness: Liveness(birth: n), capturedInProc: -1)
         let id = ctx.scopes[current].variables.addNode(name)
         ctx.scopes[current].variables.nodes[id].data = v
 
@@ -204,6 +223,8 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
       if isCond:
         kind = CondScope
         subId = currentCond
+      elif isProc:
+        kind = ProcScope
 
       var newNode = ScopeNode(kind: kind, id: ctx.scopes.len, subId: subId, parent: current, variables: newTrie())
       ctx.scopes[current].children.add(newNode.id)
@@ -229,10 +250,10 @@ proc collectVarData(ctx: var BCContext, nid: int, root: NifCursor, isCond: bool 
           let inst = ctx.cache.getType(field.ty)
           let kind = if VarF in field.subinfo: VarK else: LetK
 
-          let v = Variable(kind: kind, ty: inst, name: fname, liveness: Liveness(birth: n))
+          let v = Variable(kind: kind, ty: inst, name: fname, liveness: Liveness(birth: n), capturedInProc: -1)
           ctx.varToAdd.add(v)
 
-      collectVarData(ctx, current, n)
+      collectVarData(ctx, current, n, isProc = true)
     else:
       case n.otherKind:
       of ElifU, ElseU, OfU:
@@ -406,12 +427,23 @@ proc checkPath(ctx: var BCContext, node: int, r: var Replacer, path: SymPath, is
       ctx.errorStack.add errorInstance("Can't assign an immutable let variable to a var.", n, n)
       return
 
-    # Here we check is anything on the path to the variable is already moved
+    let capScope = getCapturingProcScope(ctx, node, ownerId)
+    if capScope != -1 and varType.kind notin {ObjectType, PrimitiveType} and ctx.features.moves:
+      if ownerScope().variables.nodes[id].data.state.kind != Moved:
+        ownerScope().variables.nodes[id].data.state = BorrowState(kind: Moved, pos: n)
+        ownerScope().variables.nodes[id].data.capturedInProc = capScope
+        movePathsWithPrefix ownerScope(), path, n
+
+    # Here we check if anything on the path to the variable is already moved
     # And prevent use after move
     let state = ownerScope().variables.nodes[id].data.state
+    let capturedProc = ownerScope().variables.nodes[id].data.capturedInProc
     if (state.kind == Moved or isAnyDescendantMoved(ownerScope(), path)):
-      ctx.errorStack.add errorInstance("Used after move here", r.getCursor, state.pos)
-      return
+      if capturedProc != -1 and isDescendantOf(ctx, node, capturedProc):
+        discard
+      else:
+        ctx.errorStack.add errorInstance("Used after move here", r.getCursor, state.pos)
+        return
 
     let scope = addr ctx.scopes[node]
     if scope.kind != CondScope:
