@@ -9,7 +9,7 @@ type
 
 proc main() =
   var p = RefO()
-  var n = proc () =
+  var n: proc () = proc () =
     var x = p
   echo p.x
 
